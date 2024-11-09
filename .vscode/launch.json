@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "C/C++ Runner: Debug Session",
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "/Users/novrusshehaj/Desktop/programming/c++/projects/YT2MP3-WAV",
+      "program": "/Users/novrusshehaj/Desktop/programming/c++/projects/YT2MP3-WAV/build/Debug/outDebug"
+    }
+  ]
+}
