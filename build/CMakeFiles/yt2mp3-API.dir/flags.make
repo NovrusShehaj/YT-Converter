@@ -4,9 +4,9 @@
 # compile CXX with /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/c++
 CXX_DEFINES = -DBOOST_SYSTEM_DYN_LINK -DBOOST_SYSTEM_NO_LIB -DCPPREST_FORCE_HTTP_CLIENT_ASIO -DCPPREST_FORCE_HTTP_LISTENER_ASIO -DCPPREST_NO_SSL_LEAK_SUPPRESS
 
-CXX_INCLUDES = -isystem /opt/homebrew/include
+CXX_INCLUDES = -I/opt/local/libexec/openssl3/include -isystem /opt/homebrew/include
 
-CXX_FLAGSarm64 = -std=gnu++11 -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX14.4.sdk
+CXX_FLAGSarm64 = -std=gnu++11 -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.1.sdk
 
-CXX_FLAGS = -std=gnu++11 -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX14.4.sdk
+CXX_FLAGS = -std=gnu++11 -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.1.sdk
 

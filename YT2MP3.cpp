@@ -31,9 +31,9 @@ string extractVideoID(const string& url) {
 }
 
 void downloadVideo(const string& url, const string& videoID) {
-    string downloadCommand = "youtube-dl -f 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4' -o 'temp_" + videoID + ".mp4' '" + url + "'";
+    string downloadCommand = "yt-dlp -f 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4' -o 'temp_" + videoID + ".mp4' '" + url + "'";
     if (system(downloadCommand.c_str()) != 0) {
-        throw runtime_error("youtube-dl command failed");
+        throw runtime_error("yt-dlp command failed");
     }
 }
 
@@ -67,16 +67,24 @@ void processVideo(const string& url, const string& format) {
     cout << "The audio file has been saved as output_" + videoID + "." + format << endl;
 }
 
-int main() {
+int main(int argc, char* argv[]) {
 
-    main_API();
+    /*main_API();
     string url;
     cout << "Enter the YouTube URL: ";
     cin >> url;
 
     string format;
     cout << "Enter the output format (mp3, mp4, wav): ";
-    cin >> format;
+    cin >> format;*/
+
+    if (argc != 3) {
+        cerr << "Usage: " << argv[0] << " <YouTube URL> <format (mp3, mp4, wav)>" << endl;
+        return 1;
+    }
+
+    string url = argv[1];
+    string format = argv[2];
 
     try {
         processVideo(url, format);
