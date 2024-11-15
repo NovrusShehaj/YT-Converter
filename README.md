@@ -46,17 +46,6 @@ Where FORMAT can be:
 - mp4 - Keep as MP4 video
 - wav - Convert to WAV audio
 
-### API Interface
-
-1. Run the API server:
-    ```sh
-    ./yt2mp3-API
-    ```
-
-2. Make a GET request to the API with the YouTube URL and desired format:
-    ```sh
-    curl "http://localhost:8080/convert?url=<YouTube_URL>&format=<format>"
-    ```
 ## Source Files
 
 - `YT2MP3.cpp`: Contains the main logic for the command-line interface.
@@ -76,11 +65,6 @@ Where FORMAT can be:
 - `void processVideo(const string& url, const string& format)`: Processes the video by downloading and converting it.
 - `int main()`: Entry point for the command-line interface.
 
-### API Interface
-
-- `void handle_request(http_request request)`: Handles incoming HTTP requests.
-- `int main_API()`: Entry point for the API interface.
-
 ## Example
 ```sh
 ./YT2MP3 "https://www.youtube.com/watch?v=r6tMTzEiGPI" mp3
@@ -96,8 +80,124 @@ Where FORMAT can be:
     - MP4: Keeps original video format
     - WAV: Converts to uncompressed audio
 
-## Troubleshooting
+## API Version
 
+The API version of YT-Converter provides a RESTful interface for converting YouTube videos to audio/video formats using HTTP requests.
+
+### Dependencies
+
+- C++17 compiler
+- cpprestsdk (`brew install cpprestsdk`)
+- Boost (`brew install boost`)
+- OpenSSL (`brew install openssl`)
+- youtube-dl/yt-dlp (`brew install yt-dlp`)
+- ffmpeg (`brew install ffmpeg`)
+
+### Compilation
+
+```sh
+g++ -std=c++17 \
+    -I$(brew --prefix cpprestsdk)/include \
+    -I$(brew --prefix boost)/include \
+    -I$(brew --prefix openssl)/include \
+    -L$(brew --prefix cpprestsdk)/lib \
+    -L$(brew --prefix boost)/lib \
+    -L$(brew --prefix openssl)/lib \
+    -o yt2mp3-API \
+    [yt2mp3-API.cpp](http://_vscodecontentref_/1) \
+    -lcpprest \
+    -lboost_system \
+    -lssl \
+    -lcrypto
+```
+
+## Running the Server
+```sh
+./yt2mp3-API
+```
+
+The server will start listening on http://localhost:8080.
+
+## API Endpoints
+
+### Convert YouTube Video
+- URL: http://localhost:8080
+- Method: GET
+- Query Parameters:
+    - url: The YouTube video URL (required)
+    - format: Output format - mp3, mp4, or wav (required)
+
+### Example Requests
+
+#### Convert to MP3:
+
+```sh
+curl "http://localhost:8080?url=https://www.youtube.com/watch?v=VIDEO_ID&format=mp3"
+```
+
+#### Convert to MP4:
+```sh
+curl "http://localhost:8080?url=https://www.youtube.com/watch?v=VIDEO_ID&format=mp4"
+```
+
+#### Convert to WAV:
+```sh
+curl "http://localhost:8080?url=https://www.youtube.com/watch?v=VIDEO_ID&format=wav"
+```
+
+## API Response
+
+### Success Response:
+```json
+{
+    "status": 200,
+    "message": "The audio file has been saved as output_VIDEO_ID.FORMAT"
+}
+```
+
+### Error Response:
+```json
+{
+    "status": 400,
+    "error": "Missing url or format"
+}
+```
+Or
+```json
+{
+    "status": 500,
+    "error": "Error message from the server"
+}
+```
+
+## API Implementation Details
+The API server uses:
+- cpprestsdk for HTTP server functionality
+- Boost libraries for networking and utilities
+- OpenSSL for secure connections
+- yt-dlp for downloading YouTube videos
+- ffmpeg for audio/video conversion
+
+The server handles requests asynchronously and can be gracefully shutdown using Ctrl+C.
+
+## API Error Handling
+- Invalid YouTube URLs return a 400 error
+- Missing parameters return a 400 error
+- Download/conversion failures return a 500 error
+- Network issues return appropriate HTTP status codes
+
+## API Limitations
+- One conversion at a time
+- Currently No progress reporting
+- Limited to YouTube URLs
+- Server currently runs on localhost only
+
+## Security Notes
+- No authentication implemented
+- No rate limiting
+- Intended for local use only
+
+## Troubleshooting
 1. If you get a 403 Forbidden error:
 ```sh
 brew upgrade yt-dlp

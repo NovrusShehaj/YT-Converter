@@ -8,8 +8,8 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
-  "/Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter/yt2mp3-API.cpp" "CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.o" "gcc" "CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.o.d"
-  "/Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter/yt2mp3.cpp" "CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.o" "gcc" "CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.o.d"
+  "/Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/yt2mp3-API.cpp" "CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.o" "gcc" "CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.o.d"
+  "/Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/yt2mp3.cpp" "CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.o" "gcc" "CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.o.d"
   )
 
 # Targets to which this target links which contain Fortran sources.

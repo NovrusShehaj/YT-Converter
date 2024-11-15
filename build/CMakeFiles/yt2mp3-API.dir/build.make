@@ -53,10 +53,10 @@ RM = /opt/homebrew/Cellar/cmake/3.29.2/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter
+CMAKE_SOURCE_DIR = /Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter/build
+CMAKE_BINARY_DIR = /Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/build
 
 # Include any dependencies generated for this target.
 include CMakeFiles/yt2mp3-API.dir/depend.make
@@ -70,32 +70,32 @@ include CMakeFiles/yt2mp3-API.dir/progress.make
 include CMakeFiles/yt2mp3-API.dir/flags.make
 
 CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.o: CMakeFiles/yt2mp3-API.dir/flags.make
-CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.o: /Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter/yt2mp3-API.cpp
+CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.o: /Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/yt2mp3-API.cpp
 CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.o: CMakeFiles/yt2mp3-API.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.o"
-	/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.o -MF CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.o.d -o CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.o -c /Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter/yt2mp3-API.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.o"
+	/usr/bin/clang++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.o -MF CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.o.d -o CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.o -c /Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/yt2mp3-API.cpp
 
 CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.i"
-	/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter/yt2mp3-API.cpp > CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.i
+	/usr/bin/clang++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/yt2mp3-API.cpp > CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.i
 
 CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.s"
-	/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter/yt2mp3-API.cpp -o CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.s
+	/usr/bin/clang++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/yt2mp3-API.cpp -o CMakeFiles/yt2mp3-API.dir/yt2mp3-API.cpp.s
 
 CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.o: CMakeFiles/yt2mp3-API.dir/flags.make
-CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.o: /Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter/yt2mp3.cpp
+CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.o: /Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/yt2mp3.cpp
 CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.o: CMakeFiles/yt2mp3-API.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building CXX object CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.o"
-	/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.o -MF CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.o.d -o CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.o -c /Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter/yt2mp3.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building CXX object CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.o"
+	/usr/bin/clang++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.o -MF CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.o.d -o CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.o -c /Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/yt2mp3.cpp
 
 CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.i"
-	/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter/yt2mp3.cpp > CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.i
+	/usr/bin/clang++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/yt2mp3.cpp > CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.i
 
 CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.s"
-	/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter/yt2mp3.cpp -o CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.s
+	/usr/bin/clang++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/yt2mp3.cpp -o CMakeFiles/yt2mp3-API.dir/yt2mp3.cpp.s
 
 # Object files for target yt2mp3-API
 yt2mp3__API_OBJECTS = \
@@ -113,7 +113,7 @@ yt2mp3-API: /opt/homebrew/lib/libboost_system-mt.dylib
 yt2mp3-API: /opt/local/libexec/openssl3/lib/libssl.dylib
 yt2mp3-API: /opt/local/libexec/openssl3/lib/libcrypto.dylib
 yt2mp3-API: CMakeFiles/yt2mp3-API.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Linking CXX executable yt2mp3-API"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Linking CXX executable yt2mp3-API"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/yt2mp3-API.dir/link.txt --verbose=$(VERBOSE)
 
 # Rule to build all files generated by this target.
@@ -125,6 +125,6 @@ CMakeFiles/yt2mp3-API.dir/clean:
 .PHONY : CMakeFiles/yt2mp3-API.dir/clean
 
 CMakeFiles/yt2mp3-API.dir/depend:
-	cd /Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter /Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter /Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter/build /Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter/build /Users/novrusshehaj/Desktop/Programming/MyProjects/YT-Converter/build/CMakeFiles/yt2mp3-API.dir/DependInfo.cmake "--color=$(COLOR)"
+	cd /Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter /Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter /Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/build /Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/build /Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/build/CMakeFiles/yt2mp3-API.dir/DependInfo.cmake "--color=$(COLOR)"
 .PHONY : CMakeFiles/yt2mp3-API.dir/depend
 
