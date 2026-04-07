@@ -4,6 +4,8 @@
 [![C++](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![CMake](https://img.shields.io/badge/CMake-3.10%2B-064F8C.svg)](https://cmake.org/)
 [![Status](https://img.shields.io/badge/Status-Active-brightgreen.svg)](#)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#)
+[![API](https://img.shields.io/badge/API-REST-informational.svg)](#)
 
 A powerful command-line tool and REST API for converting YouTube videos to MP3, MP4, and WAV formats. Built with modern C++ for high performance and reliability.
 
@@ -39,6 +41,16 @@ A powerful command-line tool and REST API for converting YouTube videos to MP3, 
 
 ## 🚀 Quick Start
 
+### Build & Installation
+```sh
+# Clone and build
+git clone https://github.com/yourusername/YT-Converter.git
+cd YT-Converter
+mkdir build && cd build
+cmake ..
+make
+```
+
 ### CLI Example
 ```sh
 # Convert YouTube video to MP3
@@ -54,7 +66,7 @@ A powerful command-line tool and REST API for converting YouTube videos to MP3, 
 ### API Example
 ```sh
 # Start the API server
-./yt2mp3-API
+./yt2mp3-api
 
 # In another terminal, request a conversion
 curl "http://localhost:8080?url=https://www.youtube.com/watch?v=VIDEO_ID&format=mp3"
@@ -88,32 +100,63 @@ pip install yt-dlp
 
 ## 🔧 Installation
 
-### 1. Clone the Repository
+### Prerequisites
+Before building YT-Converter, ensure you have the following installed:
+
+| Requirement | Version | Installation |
+|-----------|---------|--------------|
+| C++ Compiler | C++17+ | `brew install gcc@11` or `brew install clang` |
+| CMake | 3.10+ | `brew install cmake` |
+| yt-dlp | Latest | `brew install yt-dlp` or `pip install yt-dlp` |
+| ffmpeg | 4.0+ | `brew install ffmpeg` |
+| Boost | 1.70+ | `brew install boost` |
+| cpprestsdk | 2.10+ | `brew install cpprestsdk` |
+| OpenSSL | 1.1+ | `brew install openssl` |
+
+#### macOS Setup
+```sh
+brew install cmake boost cpprestsdk openssl yt-dlp ffmpeg
+```
+
+#### Linux (Ubuntu/Debian)
+```sh
+sudo apt-get install build-essential cmake libboost-all-dev libcpprest-dev libssl-dev ffmpeg
+pip install yt-dlp
+```
+
+### Build Steps
+
+1. **Clone the Repository**
 ```sh
 git clone https://github.com/yourusername/YT-Converter.git
 cd YT-Converter
 ```
 
-### 2. Create Build Directory
+2. **Create Build Directory**
 ```sh
-mkdir build
-cd build
+mkdir build && cd build
 ```
 
-### 3. Build the Project
+3. **Configure & Build**
 ```sh
 cmake ..
 make
 ```
 
-### 4. Verify Installation
+4. **Verify Installation**
 ```sh
 # Test the CLI
 ./yt2mp3-cli --help
 
 # Test the API
-./yt2mp3-API
+./yt2mp3-api
 # Should output: Server listening on http://localhost:8080
+```
+
+5. **Optional: Install System-Wide** (Linux/macOS)
+```sh
+sudo make install
+# Binaries will be available as yt2mp3-cli and yt2mp3-api
 ```
 
 ## 💻 Usage
@@ -162,7 +205,7 @@ YT-Converter/
 
 #### Starting the Server
 ```sh
-./yt2mp3-API
+./yt2mp3-api
 ```
 
 Expected output:
@@ -402,10 +445,20 @@ We welcome contributions from the community! Please read our [CONTRIBUTING.md](C
 
 ### Development Setup
 ```sh
+# Clone and setup development environment
 git clone https://github.com/yourusername/YT-Converter.git
 cd YT-Converter
+
+# Install dependencies (macOS)
+brew install cmake boost cpprestsdk openssl yt-dlp ffmpeg
+
+# Build project
 mkdir build && cd build
-cmake .. && make
+cmake .. -DCMAKE_BUILD_TYPE=Debug
+make
+
+# Run tests (if available)
+ctest --output-on-failure
 ```
 
 ## 📄 License
@@ -502,4 +555,4 @@ rm WAV/*.wav
 
 **Made with ❤️ by the YT-Converter team**
 
-Last updated: 2024
+Last updated: 2025

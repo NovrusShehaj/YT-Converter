@@ -11,9 +11,9 @@
 using namespace std;
 
 bool isValidURL(const string& url) {
-    // Simple regex to check if the URL is a valid YouTube URL
-    regex url_regex("https?://(www\\.)?youtube\\.com/watch\\?v=[^&]+");
-    return regex_match(url, url_regex);
+    // Regex to check if the URL contains a valid YouTube video ID
+    regex url_regex("https?://(www\\.)?youtube\\.com/watch\\?v=[a-zA-Z0-9_-]+");
+    return regex_search(url, url_regex);
 }
 
 bool isValidFormat(const string& format) {
@@ -24,7 +24,13 @@ bool isValidFormat(const string& format) {
 string extractVideoID(const string& url) {
     size_t found = url.find("v=");
     if (found != string::npos) {
-        return url.substr(found + 2);
+        string videoID = url.substr(found + 2);
+        // Stop at & if present (playlist or other params)
+        size_t ampPos = videoID.find('&');
+        if (ampPos != string::npos) {
+            videoID = videoID.substr(0, ampPos);
+        }
+        return videoID;
     } else {
         throw invalid_argument("Invalid YouTube URL");
     }

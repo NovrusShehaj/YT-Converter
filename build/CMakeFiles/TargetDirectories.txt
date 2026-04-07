@@ -1,3 +1,9 @@
-/Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/build/CMakeFiles/yt2mp3-API.dir
-/Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/build/CMakeFiles/edit_cache.dir
-/Users/novrusshehaj/Desktop/programming/MyProjects/YT-Converter/build/CMakeFiles/rebuild_cache.dir
+/home/ghost/Programming/YT-Converter/build/CMakeFiles/yt-converter-core.dir
+/home/ghost/Programming/YT-Converter/build/CMakeFiles/yt2mp3-cli.dir
+/home/ghost/Programming/YT-Converter/build/CMakeFiles/yt2mp3-api.dir
+/home/ghost/Programming/YT-Converter/build/CMakeFiles/edit_cache.dir
+/home/ghost/Programming/YT-Converter/build/CMakeFiles/rebuild_cache.dir
+/home/ghost/Programming/YT-Converter/build/CMakeFiles/list_install_components.dir
+/home/ghost/Programming/YT-Converter/build/CMakeFiles/install.dir
+/home/ghost/Programming/YT-Converter/build/CMakeFiles/install/local.dir
+/home/ghost/Programming/YT-Converter/build/CMakeFiles/install/strip.dir

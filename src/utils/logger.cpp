@@ -1,11 +1,7 @@
 #include "logger.h"
-#include <iostream>
-#include <fstream>
 #include <iomanip>
-#include <chrono>
-#include <ctime>
 
-namespace yt::logging {
+namespace yt::logger {
 
 Logger& Logger::getInstance() {
     static Logger instance;
@@ -13,106 +9,99 @@ Logger& Logger::getInstance() {
 }
 
 Logger::Logger() 
-    : minLogLevel_(LogLevel::Info), 
-      outputStream_(&std::cout), 
-      errorStream_(&std::cerr),
-      showTimestamp_(true) {
+    : currentLogLevel(LogLevel::INFO), 
+      consoleOutputEnabled(true),
+      fileOutputEnabled(false),
+      logFileName("converter.log") {
 }
 
 Logger::~Logger() {
-}
-
-void Logger::setOutputStream(std::ostream* out) {
-    if (out) {
-        outputStream_ = out;
+    if (logFile && logFile->is_open()) {
+        logFile->close();
     }
 }
 
 void Logger::setLogLevel(LogLevel level) {
-    minLogLevel_ = level;
+    currentLogLevel = level;
 }
 
 LogLevel Logger::getLogLevel() const {
-    return minLogLevel_;
+    return currentLogLevel;
+}
+
+void Logger::setConsoleOutput(bool enabled) {
+    consoleOutputEnabled = enabled;
+}
+
+void Logger::setFileOutput(bool enabled, const std::string& filename) {
+    fileOutputEnabled = enabled;
+    logFileName = filename;
+    
+    if (enabled) {
+        logFile = std::make_unique<std::ofstream>(filename, std::ios::app);
+    } else if (logFile) {
+        logFile->close();
+        logFile.reset();
+    }
 }
 
 void Logger::debug(const std::string& message) {
-    if (minLogLevel_ <= LogLevel::Debug) {
-        writeLog(LogLevel::Debug, message);
-    }
+    log(LogLevel::DEBUG, message);
 }
 
 void Logger::info(const std::string& message) {
-    if (minLogLevel_ <= LogLevel::Info) {
-        writeLog(LogLevel::Info, message);
-    }
+    log(LogLevel::INFO, message);
 }
 
 void Logger::warning(const std::string& message) {
-    if (minLogLevel_ <= LogLevel::Warning) {
-        writeLog(LogLevel::Warning, message);
-    }
+    log(LogLevel::WARNING, message);
 }
 
 void Logger::error(const std::string& message) {
-    if (minLogLevel_ <= LogLevel::Error) {
-        writeLog(LogLevel::Error, message);
-    }
+    log(LogLevel::ERROR, message);
 }
 
 void Logger::critical(const std::string& message) {
-    if (minLogLevel_ <= LogLevel::Critical) {
-        writeLog(LogLevel::Critical, message);
-    }
+    log(LogLevel::CRITICAL, message);
 }
 
-void Logger::logException(const std::string& title, const std::exception& e) {
-    std::string message = title + ": " + std::string(e.what());
-    error(message);
-}
-
-void Logger::setShowTimestamp(bool enable) {
-    showTimestamp_ = enable;
-}
-
-void Logger::writeLog(LogLevel level, const std::string& message) {
-    std::string formattedMessage = getLevelString(level);
-    
-    if (showTimestamp_) {
-        formattedMessage += " [" + getTimestamp() + "]";
+void Logger::log(LogLevel level, const std::string& message) {
+    if (level < currentLogLevel) {
+        return;
     }
     
-    formattedMessage += " " + message;
-
-    // Use appropriate stream based on log level
-    if (level >= LogLevel::Error) {
-        *errorStream_ << formattedMessage << std::endl;
-    } else {
-        *outputStream_ << formattedMessage << std::endl;
+    std::string formattedMessage = formatMessage(level, message);
+    
+    if (consoleOutputEnabled) {
+        if (level >= LogLevel::ERROR) {
+            std::cerr << formattedMessage << std::endl;
+        } else {
+            std::cout << formattedMessage << std::endl;
+        }
+    }
+    
+    if (fileOutputEnabled && logFile && logFile->is_open()) {
+        *logFile << formattedMessage << std::endl;
+        logFile->flush();
     }
 }
 
-std::string Logger::getLevelString(LogLevel level) const {
+std::string Logger::levelToString(LogLevel level) const {
     switch (level) {
-        case LogLevel::Debug:
-            return "[DEBUG]";
-        case LogLevel::Info:
-            return "[INFO]";
-        case LogLevel::Warning:
-            return "[WARNING]";
-        case LogLevel::Error:
-            return "[ERROR]";
-        case LogLevel::Critical:
-            return "[CRITICAL]";
-        default:
-            return "[UNKNOWN]";
+        case LogLevel::DEBUG:    return "DEBUG";
+        case LogLevel::INFO:     return "INFO";
+        case LogLevel::WARNING:  return "WARNING";
+        case LogLevel::ERROR:    return "ERROR";
+        case LogLevel::CRITICAL: return "CRITICAL";
+        default:                 return "UNKNOWN";
     }
 }
 
-std::string Logger::getTimestamp() const {
+std::string Logger::getCurrentTimestamp() const {
     auto now = std::chrono::system_clock::now();
     auto time = std::chrono::system_clock::to_time_t(now);
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()) % 1000;
     
     std::stringstream ss;
     ss << std::put_time(std::localtime(&time), "%Y-%m-%d %H:%M:%S");
@@ -121,4 +110,12 @@ std::string Logger::getTimestamp() const {
     return ss.str();
 }
 
-} // namespace yt::logging
+std::string Logger::formatMessage(LogLevel level, const std::string& message) const {
+    std::stringstream ss;
+    ss << "[" << getCurrentTimestamp() << "] "
+       << "[" << levelToString(level) << "] "
+       << message;
+    return ss.str();
+}
+
+} // namespace yt::logger

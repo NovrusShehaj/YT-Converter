@@ -8,7 +8,7 @@
 namespace yt::converter {
 
 std::string processVideo(const std::string& url, const std::string& format) {
-    auto& logger = yt::logging::Logger::getInstance();
+    auto& logger = yt::logger::Logger::getInstance();
     
     logger.info("Starting video processing");
     logger.debug("URL: " + url + ", Format: " + format);
@@ -53,7 +53,7 @@ std::string processVideo(const std::string& url, const std::string& format) {
 }
 
 std::optional<std::string> extractVideoID(const std::string& url) {
-    auto& logger = yt::logging::Logger::getInstance();
+    auto& logger = yt::logger::Logger::getInstance();
     logger.debug("Extracting video ID from URL");
 
     // Try to find the video ID after "v="
@@ -78,7 +78,7 @@ std::optional<std::string> extractVideoID(const std::string& url) {
 }
 
 void downloadVideo(const std::string& url, const std::string& videoID) {
-    auto& logger = yt::logging::Logger::getInstance();
+    auto& logger = yt::logger::Logger::getInstance();
     logger.debug("Downloading video with ID: " + videoID);
 
     // Build the yt-dlp command
@@ -98,7 +98,7 @@ void downloadVideo(const std::string& url, const std::string& videoID) {
 }
 
 void convertVideo(const std::string& format, const std::string& videoID) {
-    auto& logger = yt::logging::Logger::getInstance();
+    auto& logger = yt::logger::Logger::getInstance();
     logger.debug("Converting video with ID: " + videoID + " to format: " + format);
 
     std::string tempFile = "temp_" + videoID + ".mp4";

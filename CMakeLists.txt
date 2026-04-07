@@ -1,4 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
+
+# Use new Boost config-based discovery (no more FindBoost module)
+cmake_policy(SET CMP0167 NEW)
+
 project(YT-Converter
     VERSION 1.0.0
     DESCRIPTION "YouTube to MP3/MP4/WAV Converter with CLI and REST API"
@@ -29,7 +33,8 @@ endif()
 
 # Find required packages
 find_package(cpprestsdk REQUIRED CONFIG)
-find_package(Boost REQUIRED COMPONENTS system)
+# Boost.System is header-only since Boost 1.69; no component needed
+find_package(Boost REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # Optional: Enable testing
@@ -50,16 +55,14 @@ include_directories(${OPENSSL_INCLUDE_DIR})
 # Core Library - Shared converter, validation, and logger functionality
 set(CORE_SOURCES
     ${PROJECT_SOURCE_DIR}/core/converter.cpp
-    ${PROJECT_SOURCE_DIR}/core/validator.cpp
-    ${PROJECT_SOURCE_DIR}/core/logger.cpp
-    ${PROJECT_SOURCE_DIR}/utils/file_utils.cpp
+    ${PROJECT_SOURCE_DIR}/utils/validation.cpp
+    ${PROJECT_SOURCE_DIR}/utils/logger.cpp
 )
 
 set(CORE_HEADERS
-    ${PROJECT_INCLUDE_DIR}/core/converter.h
-    ${PROJECT_INCLUDE_DIR}/core/validator.h
-    ${PROJECT_INCLUDE_DIR}/core/logger.h
-    ${PROJECT_INCLUDE_DIR}/utils/file_utils.h
+    ${PROJECT_INCLUDE_DIR}/converter.h
+    ${PROJECT_INCLUDE_DIR}/validation.h
+    ${PROJECT_INCLUDE_DIR}/logger.h
 )
 
 # Check if source files exist, if not create a minimal library
@@ -74,7 +77,7 @@ endif()
 if(TARGET yt-converter-core)
     target_link_libraries(yt-converter-core
         PUBLIC
-            Boost::system
+            Boost::boost
             OpenSSL::SSL
             OpenSSL::Crypto
     )
@@ -98,7 +101,7 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/YT2MP3.cpp)
     target_link_libraries(yt2mp3-cli
         PRIVATE
             yt-converter-core
-            Boost::system
+            Boost::boost
             OpenSSL::SSL
             OpenSSL::Crypto
     )
@@ -127,7 +130,7 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/yt2mp3-API.cpp)
         PRIVATE
             yt-converter-core
             cpprestsdk::cpprest
-            Boost::system
+            Boost::boost
             OpenSSL::SSL
             OpenSSL::Crypto
     )
