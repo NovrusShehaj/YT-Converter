@@ -40,7 +40,7 @@ static std::atomic<bool> shouldShutdown(false);
  * @param signal The signal number
  */
 void signalHandler(int signal) {
-    auto& logger = yt::logging::Logger::getInstance();
+    auto& logger = yt::logger::Logger::getInstance();
     if (signal == SIGINT) {
         logger.info("Received SIGINT signal, shutting down gracefully...");
         shouldShutdown = true;
@@ -52,7 +52,7 @@ void signalHandler(int signal) {
  * @param request The HTTP request object
  */
 void handleRequest(http_request request) {
-    auto& logger = yt::logging::Logger::getInstance();
+    auto& logger = yt::logger::Logger::getInstance();
     
     try {
         // Parse query parameters
@@ -116,7 +116,7 @@ void handleRequest(http_request request) {
         request.reply(status_codes::OK, successResponse);
     }
     catch (const std::invalid_argument& e) {
-        auto& logger = yt::logging::Logger::getInstance();
+        auto& logger = yt::logger::Logger::getInstance();
         logger.warning("Invalid argument error: " + std::string(e.what()));
         
         json::value errorResponse;
@@ -128,7 +128,7 @@ void handleRequest(http_request request) {
         request.reply(status_codes::BadRequest, errorResponse);
     }
     catch (const std::runtime_error& e) {
-        auto& logger = yt::logging::Logger::getInstance();
+        auto& logger = yt::logger::Logger::getInstance();
         logger.error("Runtime error: " + std::string(e.what()));
         
         json::value errorResponse;
@@ -140,7 +140,7 @@ void handleRequest(http_request request) {
         request.reply(status_codes::InternalError, errorResponse);
     }
     catch (const std::exception& e) {
-        auto& logger = yt::logging::Logger::getInstance();
+        auto& logger = yt::logger::Logger::getInstance();
         logger.critical("Unexpected error: " + std::string(e.what()));
         
         json::value errorResponse;
@@ -171,11 +171,10 @@ void printServerInfo() {
 }
 
 int main() {
-    auto& logger = yt::logging::Logger::getInstance();
+    auto& logger = yt::logger::Logger::getInstance();
     
     // Configure logger for API server
-    logger.setLogLevel(yt::logging::LogLevel::Debug);
-    logger.setShowTimestamp(true);
+    logger.setLogLevel(yt::logger::LogLevel::DEBUG);
 
     logger.info("Initializing YouTube Converter API Server");
 
@@ -195,7 +194,7 @@ int main() {
         listener
             .open()
             .then([&listener]() {
-                auto& logger = yt::logging::Logger::getInstance();
+                auto& logger = yt::logger::Logger::getInstance();
                 logger.info("HTTP listener opened successfully");
             })
             .wait();

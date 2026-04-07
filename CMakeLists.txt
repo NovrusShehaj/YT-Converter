@@ -91,11 +91,11 @@ endif()
 
 # CLI Executable
 set(CLI_SOURCES
-    YT2MP3.cpp
+    ${PROJECT_SOURCE_DIR}/cli/main.cpp
 )
 
 # Only add CLI executable if the main file exists
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/YT2MP3.cpp)
+if(EXISTS ${PROJECT_SOURCE_DIR}/cli/main.cpp)
     add_executable(yt2mp3-cli ${CLI_SOURCES})
 
     target_link_libraries(yt2mp3-cli
@@ -119,11 +119,11 @@ endif()
 
 # API Server Executable
 set(API_SOURCES
-    yt2mp3-API.cpp
+    ${PROJECT_SOURCE_DIR}/api/server.cpp
 )
 
 # Only add API executable if the main file exists
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/yt2mp3-API.cpp)
+if(EXISTS ${PROJECT_SOURCE_DIR}/api/server.cpp)
     add_executable(yt2mp3-api ${API_SOURCES})
 
     target_link_libraries(yt2mp3-api
@@ -207,10 +207,10 @@ message(STATUS "  - Boost: YES")
 message(STATUS "  - OpenSSL: YES")
 message(STATUS "")
 message(STATUS "Targets:")
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/YT2MP3.cpp)
+if(EXISTS ${PROJECT_SOURCE_DIR}/cli/main.cpp)
 message(STATUS "  - yt2mp3-cli (CLI executable)")
 endif()
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/yt2mp3-API.cpp)
+if(EXISTS ${PROJECT_SOURCE_DIR}/api/server.cpp)
 message(STATUS "  - yt2mp3-api (REST API server)")
 endif()
 message(STATUS "  - yt-converter-core (Core library)")

@@ -32,11 +32,10 @@ void printUsage(const char* programName) {
 }
 
 int main(int argc, char* argv[]) {
-    auto& logger = yt::logging::Logger::getInstance();
+    auto& logger = yt::logger::Logger::getInstance();
     
     // Configure logger for CLI use
-    logger.setLogLevel(yt::logging::LogLevel::Info);
-    logger.setShowTimestamp(false);
+    logger.setLogLevel(yt::logger::LogLevel::INFO);
 
     logger.info("YouTube Converter CLI");
 
