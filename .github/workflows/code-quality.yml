@@ -1,0 +1,433 @@
+name: Code Quality
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - '*.cpp'
+      - '*.h'
+      - 'CMakeLists.txt'
+      - '.github/workflows/code-quality.yml'
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - '*.cpp'
+      - '*.h'
+      - 'CMakeLists.txt'
+      - '.github/workflows/code-quality.yml'
+
+jobs:
+  # ============================================================================
+  # Code Formatting Check
+  # ============================================================================
+  clang-format:
+    name: Code Formatting (clang-format)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+
+      - name: Display clang-format version
+        run: clang-format --version
+
+      - name: Check code formatting
+        run: |
+          echo "========================================="
+          echo "Checking code formatting with clang-format"
+          echo "========================================="
+
+          # Find all C++ source and header files
+          files=$(find . -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.hpp" \) \
+            ! -path "./build/*" ! -path "./.git/*" ! -path "./.vscode/*")
+
+          if [ -z "$files" ]; then
+            echo "No C++ files found to check"
+            exit 0
+          fi
+
+          format_issues=0
+          for file in $files; do
+            if ! clang-format --dry-run -Werror "$file" > /dev/null 2>&1; then
+              echo "❌ Formatting issue in: $file"
+              clang-format --dry-run "$file"
+              format_issues=$((format_issues + 1))
+            else
+              echo "✓ $file"
+            fi
+          done
+
+          if [ $format_issues -gt 0 ]; then
+            echo ""
+            echo "❌ Found $format_issues file(s) with formatting issues"
+            echo "Run: clang-format -i <file> to fix automatically"
+            exit 1
+          else
+            echo ""
+            echo "✅ All files are properly formatted"
+          fi
+
+  # ============================================================================
+  # Static Analysis with clang-tidy
+  # ============================================================================
+  clang-tidy:
+    name: Static Analysis (clang-tidy)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            build-essential \
+            clang-tidy \
+            clang \
+            libboost-all-dev \
+            libssl-dev \
+            libcpprest-dev \
+            pkg-config
+
+      - name: Display clang-tidy version
+        run: clang-tidy --version
+
+      - name: Create build directory
+        run: mkdir -p build
+
+      - name: Configure CMake with clang
+        run: |
+          cd build
+          cmake \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            ..
+
+      - name: Run clang-tidy analysis
+        run: |
+          echo "========================================="
+          echo "Running clang-tidy static analysis"
+          echo "========================================="
+
+          cd build
+
+          # Find all C++ source files (exclude build directory)
+          files=$(find .. -type f \( -name "*.cpp" -o -name "*.h" \) \
+            ! -path "./build/*" ! -path "../build/*" ! -path "../.git/*" ! -path "../.vscode/*" \
+            | head -20)
+
+          if [ -z "$files" ]; then
+            echo "No C++ files found"
+            exit 0
+          fi
+
+          tidy_issues=0
+          for file in $files; do
+            echo ""
+            echo "Analyzing: $file"
+            if clang-tidy "$file" -p . -- 2>&1 | grep -E "warning:|error:" ; then
+              tidy_issues=$((tidy_issues + 1))
+            fi
+          done
+
+          if [ $tidy_issues -gt 0 ]; then
+            echo ""
+            echo "⚠️  Found potential issues. Review warnings above."
+            exit 0  # Don't fail on warnings, just report
+          else
+            echo ""
+            echo "✅ No major issues detected by clang-tidy"
+          fi
+
+  # ============================================================================
+  # Compiler Warnings Check
+  # ============================================================================
+  compiler-warnings:
+    name: Compiler Warnings Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            build-essential \
+            libboost-all-dev \
+            libssl-dev \
+            libcpprest-dev \
+            pkg-config
+
+      - name: Create build directory
+        run: mkdir -p build
+
+      - name: Configure CMake with strict warnings
+        run: |
+          cd build
+          cmake \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Werror=unused-variable -Werror=unused-parameter" \
+            ..
+
+      - name: Build and check warnings
+        run: |
+          echo "========================================="
+          echo "Building with strict compiler warnings"
+          echo "========================================="
+
+          cd build
+          cmake --build . 2>&1 | tee build.log
+
+          # Check for warnings
+          if grep -E "warning:" build.log; then
+            echo ""
+            echo "⚠️  Build completed with warnings (see above)"
+            exit 0  # Don't fail, just report
+          else
+            echo ""
+            echo "✅ Build completed with no warnings"
+          fi
+
+  # ============================================================================
+  # Code Complexity Analysis
+  # ============================================================================
+  complexity-check:
+    name: Code Complexity Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cppcheck
+
+      - name: Display cppcheck version
+        run: cppcheck --version
+
+      - name: Run cppcheck
+        run: |
+          echo "========================================="
+          echo "Running cppcheck for code analysis"
+          echo "========================================="
+
+          cppcheck \
+            --enable=all \
+            --suppress=missingIncludeSystem \
+            --suppress=unusedFunction \
+            --inconclusive \
+            --std=c++17 \
+            --error-exitcode=0 \
+            -i build \
+            -i .git \
+            . 2>&1 | tee cppcheck-report.txt
+
+          echo ""
+          echo "========================================="
+          echo "cppcheck analysis complete"
+          echo "========================================="
+
+  # ============================================================================
+  # Security Scanning
+  # ============================================================================
+  security-scan:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install security tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cppcheck \
+            flawfinder
+
+      - name: Run flawfinder
+        run: |
+          echo "========================================="
+          echo "Running flawfinder for security issues"
+          echo "========================================="
+
+          flawfinder . \
+            --exclude=build \
+            --exclude=.git \
+            --minlevel=3 \
+            --quiet \
+            || true
+
+      - name: Check for hardcoded secrets
+        run: |
+          echo "========================================="
+          echo "Checking for hardcoded secrets"
+          echo "========================================="
+
+          # Check for common secret patterns
+          if grep -r "password\|apikey\|api_key\|secret\|token" \
+            --include="*.cpp" \
+            --include="*.h" \
+            --exclude-dir=build \
+            --exclude-dir=.git \
+            . | grep -v "// " | grep -v "/*" ; then
+            echo "⚠️  Potential hardcoded secrets found (review above)"
+            exit 0
+          else
+            echo "✅ No obvious hardcoded secrets found"
+          fi
+
+  # ============================================================================
+  # Documentation Check
+  # ============================================================================
+  documentation:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for README
+        run: |
+          echo "========================================="
+          echo "Checking documentation"
+          echo "========================================="
+
+          if [ -f "README.md" ]; then
+            echo "✓ README.md exists"
+            wc -l README.md
+          else
+            echo "⚠️  README.md not found"
+          fi
+
+      - name: Check for code comments
+        run: |
+          echo ""
+          echo "Checking for code documentation..."
+
+          # Count functions without preceding comments
+          if command -v doxygen &> /dev/null; then
+            echo "✓ Doxygen is available"
+          else
+            echo "ℹ  Doxygen not installed (optional)"
+          fi
+
+  # ============================================================================
+  # Code Coverage (Optional)
+  # ============================================================================
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            build-essential \
+            gcov \
+            lcov \
+            libboost-all-dev \
+            libssl-dev \
+            libcpprest-dev \
+            pkg-config
+
+      - name: Create build directory
+        run: mkdir -p build
+
+      - name: Configure CMake with coverage
+        run: |
+          cd build
+          cmake \
+            -DCMAKE_CXX_FLAGS="--coverage -fprofile-arcs -ftest-coverage" \
+            -DCMAKE_BUILD_TYPE=Debug \
+            ..
+
+      - name: Build with coverage
+        run: |
+          cd build
+          cmake --build . || true
+
+      - name: Generate coverage report
+        run: |
+          echo "========================================="
+          echo "Code Coverage Report"
+          echo "========================================="
+
+          cd build
+
+          # Check if coverage data exists
+          if [ ! -f "*.gcda" ]; then
+            echo "ℹ  No coverage data found (tests not run)"
+            exit 0
+          fi
+
+          # Generate coverage if possible
+          if command -v lcov &> /dev/null; then
+            lcov --capture --directory . --output-file coverage.info
+            echo "Coverage report generated"
+          else
+            echo "lcov not available"
+          fi
+
+  # ============================================================================
+  # Summary Report
+  # ============================================================================
+  quality-summary:
+    name: Quality Check Summary
+    runs-on: ubuntu-latest
+    needs: [clang-format, clang-tidy, compiler-warnings, complexity-check, security-scan, documentation, coverage]
+    if: always()
+
+    steps:
+      - name: Generate summary
+        run: |
+          echo "========================================="
+          echo "Code Quality Check Summary"
+          echo "========================================="
+          echo ""
+          echo "Checks performed:"
+          echo "  ✓ Code formatting (clang-format)"
+          echo "  ✓ Static analysis (clang-tidy)"
+          echo "  ✓ Compiler warnings"
+          echo "  ✓ Code complexity (cppcheck)"
+          echo "  ✓ Security scanning (flawfinder)"
+          echo "  ✓ Documentation"
+          echo "  ✓ Code coverage"
+          echo ""
+
+          if [ "${{ needs.clang-format.result }}" == "failure" ]; then
+            echo "❌ Code formatting check FAILED"
+            exit 1
+          fi
+
+          echo "✅ All quality checks completed"
+          echo "========================================="

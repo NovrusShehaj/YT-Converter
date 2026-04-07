@@ -1,0 +1,105 @@
+# Build directories
+build/
+cmake-build-debug/
+cmake-build-release/
+cmake-build-*/
+dist/
+out/
+
+# CMake
+CMakeCache.txt
+CMakeLists.txt.user
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+
+# Compiled object files
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.exe
+*.a
+*.lib
+
+# Executables
+yt2mp3-API
+YT2MP3
+*.out
+*.app
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.project
+.cproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+.clangd/
+compile_commands.json
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+*.swp
+*.swo
+*~
+.cache/
+.ccache/
+
+# Dependencies
+third_party/
+external/
+vendor/
+
+# Downloaded videos and converted files
+*.mp3
+*.mp4
+*.wav
+*.mkv
+MP3/
+MP4/
+MKV/
+downloads/
+output/
+temp_video/
+
+# System files
+.DS_Store
+Thumbs.db
+*.stackdump
+ehthumbs.db
+
+# Node modules (if using any frontend tools)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Testing
+coverage/
+*.gcov
+*.gcda
+*.gcno
+
+# Misc
+.vscode-server/
+.remote-containers.json
+*.code-workspace
