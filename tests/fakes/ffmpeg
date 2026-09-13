@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+LOGDIR="${YTCONV_FAKE_LOG_DIR:-.}"
+mkdir -p "$LOGDIR"
+printf '%s\n' "$@" > "$LOGDIR/ffmpeg.argv"
+echo 1 >> "$LOGDIR/ffmpeg.count"
+
+out="${@: -1}"
+mkdir -p "$(dirname "$out")"
+printf 'FAKEOUT' > "$out"
+exit 0

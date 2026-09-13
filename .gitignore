@@ -11,8 +11,8 @@ CMakeCache.txt
 CMakeLists.txt.user
 CMakeFiles/
 cmake_install.cmake
+CTestTestfile.cmake
 Makefile
-*.cmake
 
 # Compiled object files
 *.o

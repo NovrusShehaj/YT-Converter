@@ -1,558 +1,199 @@
 # YT-Converter
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![C++](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
-[![CMake](https://img.shields.io/badge/CMake-3.10%2B-064F8C.svg)](https://cmake.org/)
-[![Status](https://img.shields.io/badge/Status-Active-brightgreen.svg)](#)
-[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#)
-[![API](https://img.shields.io/badge/API-REST-informational.svg)](#)
+[![CMake](https://img.shields.io/badge/CMake-3.16%2B-064F8C.svg)](https://cmake.org/)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-lightgrey.svg)](#)
 
-A powerful command-line tool and REST API for converting YouTube videos to MP3, MP4, and WAV formats. Built with modern C++ for high performance and reliability.
+Local C++17 CLI and optional localhost REST API that convert a single YouTube video to `mp3`, `mp4`, or `wav` by running `yt-dlp` and `ffmpeg` as separate processes (no shell). There is no web UI, database, or public service.
 
-![YT-Converter](https://img.shields.io/badge/YouTube%20Converter-Multi--Format-red.svg)
+**This is a personal, loopback tool.** You are responsible for YouTube Terms of Service and copyright. Public Internet deployment is out of scope until you have legal review, authentication, quotas, and isolation that this repository does not provide.
 
-## 📋 Table of Contents
+## Features
 
-- [Features](#-features)
-- [Quick Start](#-quick-start)
-- [Prerequisites](#-prerequisites)
-- [Installation](#-installation)
-- [Usage](#-usage)
-  - [Command-Line Interface](#command-line-interface)
-  - [REST API](#rest-api)
-- [Architecture](#-architecture)
-- [Project Structure](#-project-structure)
-- [API Reference](#-api-reference)
-- [Contributing](#-contributing)
-- [License](#-license)
-- [Acknowledgments](#-acknowledgments)
-- [Troubleshooting](#-troubleshooting)
+- CLI (`yt2mp3-cli`) and localhost API (`yt2mp3-api`)
+- Strict YouTube URL parsing (`watch`, `youtu.be`, `shorts`, `embed`, `live`)
+- Video IDs used in paths must match `^[A-Za-z0-9_-]{11}$`
+- yt-dlp is always invoked with a reconstructed `watch?v=` URL and `--no-playlist`
+- Temporary files live under a configured output root and are deleted after success or failure
+- Environment-based configuration; remote bind requires an API key
+- Unit tests with fake `yt-dlp` / `ffmpeg` binaries (no network)
 
-## ✨ Features
+## Prerequisites
 
-- **Multi-Format Conversion**: Convert YouTube videos to MP3, MP4, or WAV formats
-- **Dual Interface**: Use as a command-line tool or access via REST API
-- **Input Validation**: Comprehensive YouTube URL and format validation
-- **Error Handling**: Robust error handling for download and conversion failures
-- **High Quality**: Downloads in best available quality and maintains audio/video fidelity
-- **Cross-Platform**: Compatible with macOS, Linux, and Windows
-- **Asynchronous Processing**: Non-blocking API for concurrent conversions
-- **Lightweight & Fast**: Efficient resource usage with minimal dependencies
+| Requirement | Version | Notes |
+|---|---|---|
+| C++ compiler | C++17 | GCC, Clang |
+| CMake | 3.16+ | 3.30+ policy CMP0167 is guarded |
+| yt-dlp | latest | Required at runtime |
+| ffmpeg | 4+ | Required at runtime |
+| cpprestsdk | 2.10+ | Required only to build the API |
+| Boost, OpenSSL | as needed by cpprestsdk | API only |
+| GoogleTest | 1.15+ | Fetched automatically when `-DBUILD_TESTS=ON` |
 
-## 🚀 Quick Start
+### Linux (Debian/Ubuntu)
 
-### Build & Installation
-```sh
-# Clone and build
-git clone https://github.com/yourusername/YT-Converter.git
-cd YT-Converter
-mkdir build && cd build
-cmake ..
-make
-```
-
-### CLI Example
-```sh
-# Convert YouTube video to MP3
-./yt2mp3-cli "https://www.youtube.com/watch?v=VIDEO_ID" mp3
-
-# Convert to WAV format
-./yt2mp3-cli "https://www.youtube.com/watch?v=VIDEO_ID" wav
-
-# Convert to MP4 format
-./yt2mp3-cli "https://www.youtube.com/watch?v=VIDEO_ID" mp4
-```
-
-### API Example
-```sh
-# Start the API server
-./yt2mp3-api
-
-# In another terminal, request a conversion
-curl "http://localhost:8080?url=https://www.youtube.com/watch?v=VIDEO_ID&format=mp3"
-```
-
-## 📦 Prerequisites
-
-Before installing YT-Converter, ensure you have the following installed:
-
-| Requirement | Version | Installation |
-|-----------|---------|--------------|
-| C++ Compiler | C++17+ | `brew install gcc@11` or `brew install clang` |
-| CMake | 3.10+ | `brew install cmake` |
-| yt-dlp | Latest | `brew install yt-dlp` |
-| ffmpeg | 4.0+ | `brew install ffmpeg` |
-| Boost | 1.70+ | `brew install boost` |
-| cpprestsdk | 2.10+ | `brew install cpprestsdk` |
-| OpenSSL | 1.1+ | `brew install openssl` |
-
-### macOS Installation
-```sh
-brew install cmake boost cpprestsdk openssl yt-dlp ffmpeg
-```
-
-### Linux Installation (Ubuntu/Debian)
-```sh
-sudo apt-get install build-essential cmake libboost-all-dev libcpprest-dev libssl-dev
-sudo apt-get install ffmpeg
-pip install yt-dlp
-```
-
-## 🔧 Installation
-
-### Prerequisites
-Before building YT-Converter, ensure you have the following installed:
-
-| Requirement | Version | Installation |
-|-----------|---------|--------------|
-| C++ Compiler | C++17+ | `brew install gcc@11` or `brew install clang` |
-| CMake | 3.10+ | `brew install cmake` |
-| yt-dlp | Latest | `brew install yt-dlp` or `pip install yt-dlp` |
-| ffmpeg | 4.0+ | `brew install ffmpeg` |
-| Boost | 1.70+ | `brew install boost` |
-| cpprestsdk | 2.10+ | `brew install cpprestsdk` |
-| OpenSSL | 1.1+ | `brew install openssl` |
-
-#### macOS Setup
-```sh
-brew install cmake boost cpprestsdk openssl yt-dlp ffmpeg
-```
-
-#### Linux (Ubuntu/Debian)
 ```sh
 sudo apt-get install build-essential cmake libboost-all-dev libcpprest-dev libssl-dev ffmpeg
 pip install yt-dlp
 ```
 
-### Build Steps
+### macOS
 
-1. **Clone the Repository**
 ```sh
-git clone https://github.com/yourusername/YT-Converter.git
-cd YT-Converter
-```
-
-2. **Create Build Directory**
-```sh
-mkdir build && cd build
-```
-
-3. **Configure & Build**
-```sh
-cmake ..
-make
-```
-
-4. **Verify Installation**
-```sh
-# Test the CLI
-./yt2mp3-cli --help
-
-# Test the API
-./yt2mp3-api
-# Should output: Server listening on http://localhost:8080
-```
-
-5. **Optional: Install System-Wide** (Linux/macOS)
-```sh
-sudo make install
-# Binaries will be available as yt2mp3-cli and yt2mp3-api
-```
-
-## 💻 Usage
-
-### Command-Line Interface
-
-#### Basic Usage
-```sh
-./yt2mp3-cli "<YouTube_URL>" <FORMAT>
-```
-
-#### Parameters
-- `<YouTube_URL>`: Full YouTube URL (must be quoted)
-- `<FORMAT>`: Output format - `mp3`, `mp4`, or `wav`
-
-#### Examples
-
-**Convert to MP3 (192kbps stereo audio)**
-```sh
-./yt2mp3-cli "https://www.youtube.com/watch?v=r6tMTzEiGPI" mp3
-# Output: Successfully saved as output_r6tMTzEiGPI.mp3
-```
-
-**Convert to MP4 (original format)**
-```sh
-./yt2mp3-cli "https://www.youtube.com/watch?v=r6tMTzEiGPI" mp4
-# Output: Successfully saved as output_r6tMTzEiGPI.mp4
-```
-
-**Convert to WAV (uncompressed audio)**
-```sh
-./yt2mp3-cli "https://www.youtube.com/watch?v=r6tMTzEiGPI" wav
-# Output: Successfully saved as output_r6tMTzEiGPI.wav
-```
-
-#### Output Directory Structure
-```
-YT-Converter/
-├── MP3/           # MP3 conversions
-├── MP4/           # MP4 downloads
-├── WAV/           # WAV conversions
-└── output_*.*     # Converted files
-```
-
-### REST API
-
-#### Starting the Server
-```sh
-./yt2mp3-api
-```
-
-Expected output:
-```
-Server is listening on http://localhost:8080
-```
-
-#### API Endpoints
-
-##### Convert Endpoint
-- **URL**: `http://localhost:8080`
-- **Method**: `GET`
-- **Query Parameters**:
-  - `url` (required): YouTube video URL
-  - `format` (required): Output format (`mp3`, `mp4`, `wav`)
-
-#### API Examples
-
-**Convert to MP3 using cURL**
-```sh
-curl "http://localhost:8080?url=https://www.youtube.com/watch?v=VIDEO_ID&format=mp3"
-```
-
-**Convert to MP4 using Python**
-```python
-import requests
-
-response = requests.get(
-    "http://localhost:8080",
-    params={
-        "url": "https://www.youtube.com/watch?v=VIDEO_ID",
-        "format": "mp4"
-    }
-)
-print(response.json())
-```
-
-**Convert to WAV using JavaScript/Node.js**
-```javascript
-fetch('http://localhost:8080?url=https://www.youtube.com/watch?v=VIDEO_ID&format=wav')
-  .then(response => response.json())
-  .then(data => console.log(data))
-  .catch(error => console.error('Error:', error));
-```
-
-#### Success Response
-```json
-{
-    "status": 200,
-    "message": "The audio file has been saved as output_VIDEO_ID.mp3"
-}
-```
-
-#### Error Responses
-
-**Missing Parameters (400)**
-```json
-{
-    "status": 400,
-    "error": "Missing url or format parameter"
-}
-```
-
-**Invalid URL (400)**
-```json
-{
-    "status": 400,
-    "error": "Invalid YouTube URL format"
-}
-```
-
-**Server Error (500)**
-```json
-{
-    "status": 500,
-    "error": "Failed to download or convert video"
-}
-```
-
-#### HTTP Status Codes
-| Code | Meaning |
-|------|---------|
-| 200 | Success - conversion completed |
-| 400 | Bad Request - invalid URL or format |
-| 500 | Server Error - download/conversion failed |
-| 503 | Service Unavailable - server overloaded |
-
-## 🏗️ Architecture
-
-### System Overview
-```
-User Input (CLI/API)
-        │
-        ├─────────────────────────────────────────┐
-        │                                          │
-    [CLI Handler]                          [API Handler]
-        │                                          │
-        └─────────────────────┬────────────────────┘
-                             │
-                      [Validation Layer]
-                             │
-                   ┌──────────┴──────────┐
-                   │                    │
-              [URL Validator]    [Format Validator]
-                   │                    │
-                   └──────────┬─────────┘
-                             │
-                      [Processing Core]
-                             │
-                   ┌──────────┴──────────┐
-                   │                    │
-                [yt-dlp]           [ffmpeg]
-                   │                    │
-        ┌──────────┘                    │
-        │                              │
-    [Download]                    [Convert]
-        │                              │
-        └──────────────┬───────────────┘
-                      │
-                [Output Files]
-                      │
-        ┌─────────────┼─────────────┐
-        │             │             │
-      [MP3]         [MP4]         [WAV]
-```
-
-### Data Flow
-1. **Input Validation**: URL and format validation using regex patterns
-2. **Video ID Extraction**: Isolates video ID from the YouTube URL
-3. **Download**: yt-dlp retrieves the video in best available quality
-4. **Conversion**: ffmpeg converts to requested format with appropriate settings
-5. **Output**: Files saved to format-specific directories
-
-### Conversion Specifications
-
-| Format | Audio Codec | Bitrate | Sample Rate | Channels |
-|--------|-------------|---------|-------------|----------|
-| MP3 | libmp3lame | 192 kbps | 48000 Hz | Stereo |
-| WAV | PCM | Lossless | 48000 Hz | Stereo |
-| MP4 | Original | Original | Original | Original |
-
-## 📁 Project Structure
-
-```
-YT-Converter/
-├── CMakeLists.txt              # Build configuration
-├── README.md                   # This file
-├── LICENSE                     # MIT License
-├── .gitignore                  # Git ignore rules
-├── CONTRIBUTING.md             # Contribution guidelines
-├── CODE_OF_CONDUCT.md          # Community standards
-│
-├── src/                        # Source files
-│   ├── cli/                    # Command-line interface
-│   │   └── main.cpp
-│   ├── api/                    # REST API server
-│   │   ├── server.cpp
-│   │   └── handlers.cpp
-│   ├── core/                   # Core functionality
-│   │   ├── converter.cpp
-│   │   └── validator.cpp
-│   └── utils/                  # Utility functions
-│       ├── logger.cpp
-│       └── helpers.cpp
-│
-├── include/                    # Header files
-│   ├── converter.h
-│   ├── validator.h
-│   └── api.h
-│
-├── YT2MP3.h / YT2MP3.cpp       # Legacy CLI implementation
-├── yt2mp3-API.h / yt2mp3-API.cpp # Legacy API implementation
-│
-├── docs/                       # Documentation
-│   ├── ARCHITECTURE.md         # Technical architecture
-│   └── API.md                  # API documentation
-│
-├── tests/                      # Unit tests
-│   ├── test_validator.cpp
-│   └── test_converter.cpp
-│
-├── MP3/, MP4/, WAV/            # Output directories
-└── build/                      # Build artifacts (git-ignored)
-```
-
-## 📚 API Reference
-
-### Core Functions
-
-#### URL Validation
-```cpp
-bool isValidURL(const std::string& url);
-```
-Validates YouTube URL format using regex pattern matching.
-
-#### Format Validation
-```cpp
-bool isValidFormat(const std::string& format);
-```
-Validates output format is one of: mp3, mp4, wav.
-
-#### Video ID Extraction
-```cpp
-std::string extractVideoID(const std::string& url);
-```
-Extracts the video ID from YouTube URL.
-
-#### Download Video
-```cpp
-void downloadVideo(const std::string& url, const std::string& videoID);
-```
-Downloads video using yt-dlp in best quality.
-
-#### Convert Video
-```cpp
-void convertVideo(const std::string& format, const std::string& videoID);
-```
-Converts downloaded video to specified format using ffmpeg.
-
-#### Process Video
-```cpp
-void processVideo(const std::string& url, const std::string& format);
-```
-Complete pipeline: validate → download → convert → save.
-
-## 🤝 Contributing
-
-We welcome contributions from the community! Please read our [CONTRIBUTING.md](CONTRIBUTING.md) guide for details on our code of conduct and the process for submitting pull requests.
-
-### Quick Contributing Guide
-
-1. **Fork** the repository
-2. **Create** a feature branch (`git checkout -b feature/AmazingFeature`)
-3. **Commit** your changes (`git commit -m 'Add AmazingFeature'`)
-4. **Push** to the branch (`git push origin feature/AmazingFeature`)
-5. **Open** a Pull Request
-
-### Development Setup
-```sh
-# Clone and setup development environment
-git clone https://github.com/yourusername/YT-Converter.git
-cd YT-Converter
-
-# Install dependencies (macOS)
 brew install cmake boost cpprestsdk openssl yt-dlp ffmpeg
-
-# Build project
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Debug
-make
-
-# Run tests (if available)
-ctest --output-on-failure
 ```
 
-## 📄 License
+Windows is not tested. The process layer has a CreateProcess path, but CI only runs on Linux and macOS.
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## Build
 
-## 🙏 Acknowledgments
-
-This project stands on the shoulders of giants:
-
-- **[yt-dlp](https://github.com/yt-dlp/yt-dlp)** - Advanced YouTube downloader
-- **[ffmpeg](https://ffmpeg.org/)** - Multimedia framework for audio/video processing
-- **[cpprestsdk](https://github.com/microsoft/cpprestsdk)** - C++ REST SDK by Microsoft
-- **[Boost Libraries](https://www.boost.org/)** - Peer-reviewed C++ libraries
-- **[CMake](https://cmake.org/)** - Build system generator
-
-Special thanks to all contributors and the open-source community.
-
-## 🐛 Troubleshooting
-
-### Common Issues and Solutions
-
-#### 1. yt-dlp: 403 Forbidden Error
 ```sh
-# Update yt-dlp to the latest version
-brew upgrade yt-dlp
-# or
-pip install --upgrade yt-dlp
+git clone https://github.com/NovrusShehaj/YT-Converter.git
+cd YT-Converter
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
-#### 2. ffmpeg Not Found
+Binaries land in `build/yt2mp3-cli` and, if cpprestsdk is present, `build/yt2mp3-api`.
+
 ```sh
-# Install ffmpeg
-brew install ffmpeg
-
-# Verify installation
-ffmpeg -version
+./build/yt2mp3-cli --help
+./build/yt2mp3-cli --version
 ```
 
-#### 3. CMake Configuration Fails
+## CLI
+
 ```sh
-# Clear build directory and retry
-rm -rf build
-mkdir build && cd build
-cmake ..
-make
+./build/yt2mp3-cli [options] <URL> [format]
 ```
 
-#### 4. API Port Already in Use
+Examples:
+
 ```sh
-# Check what's using port 8080
-lsof -i :8080
-
-# Kill the process
-kill -9 <PID>
-
-# Or modify the port in the source code and rebuild
+./build/yt2mp3-cli "https://www.youtube.com/watch?v=dQw4w9WgXcQ" mp3
+./build/yt2mp3-cli --output-dir ./output --format wav "https://youtu.be/dQw4w9WgXcQ"
+./build/yt2mp3-cli --force --no-unicode "https://www.youtube.com/shorts/dQw4w9WgXcQ" mp4
 ```
 
-#### 5. URL Must Be Quoted
-**Incorrect:**
+| Flag | Purpose |
+|---|---|
+| `--help`, `--version` | Usage and `1.0.0` |
+| `--output-dir DIR` | Finished files go here (default `./output`) |
+| `--format FMT` | `mp3`, `mp4`, or `wav` |
+| `--quality N` | Max mp4 height (default 1080) |
+| `--force` | Replace an existing `<id>.<fmt>` |
+| `--no-unicode` | ASCII status markers |
+| `-v` / `-q` | Debug or errors-only logging |
+
+Exit codes: `0` success, `2` validation, `3` missing tools, `4` download, `5` convert, `130` canceled.
+
+Finished files are `<output-dir>/<id>.<fmt>`. The absolute path is printed on success.
+
+### Conversion settings
+
+| Format | Tooling | Notes |
+|---|---|---|
+| MP3 | `bestaudio` then ffmpeg `libmp3lame` | 44100 Hz, stereo, 192 kbps |
+| WAV | `bestaudio` then ffmpeg `pcm_s16le` | 44100 Hz, stereo |
+| MP4 | video+audio merge, max height 1080 | ffmpeg `-c copy` |
+
+ffmpeg always gets `-y -nostdin -hide_banner -loglevel error`.
+
+## Localhost API
+
+The API binds `127.0.0.1:8080` by default. It will not start without `YTCONV_API_KEY` or `--allow-unauthenticated-localhost`. It refuses `0.0.0.0` / `::` unless `YTCONV_ALLOW_REMOTE=1` **and** an API key is set.
+
 ```sh
-./yt2mp3-cli https://www.youtube.com/watch?v=VIDEO_ID mp3
-# Error: Shell expands URL
+YTCONV_ALLOW_UNAUTHENTICATED_LOCALHOST=1 ./build/yt2mp3-api
 ```
 
-**Correct:**
 ```sh
-./yt2mp3-cli "https://www.youtube.com/watch?v=VIDEO_ID" mp3
+curl -sS -X POST http://127.0.0.1:8080/v1/conversions \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","format":"mp3"}'
 ```
 
-#### 6. Age-Restricted or Private Videos
-Currently, YT-Converter cannot download age-restricted or private videos. These limitations are inherent to yt-dlp's functionality.
+Success:
 
-#### 7. Insufficient Disk Space
-Ensure you have adequate disk space for downloads and conversions:
+```json
+{
+  "status": "success",
+  "error_code": "ok",
+  "message": "Conversion completed",
+  "output_path": "/abs/path/output/dQw4w9WgXcQ.mp3",
+  "job_id": "dQw4w9WgXcQ-1a2b3c4d"
+}
+```
+
+The response is JSON with an absolute `output_path`. Bytes are not streamed. There is no unauthenticated static file server.
+
+| Method | Path | Result |
+|---|---|---|
+| POST | `/v1/conversions` | Convert (JSON `url`, `format`) |
+| GET | `/v1/conversions` | 405 |
+| GET | `/v1/healthz` | Process up |
+| GET | `/v1/readyz` | Tools + writable output |
+| GET | `/v1/metrics` | Loopback only |
+| GET | `/` | 404 |
+
+If `YTCONV_API_KEY` is set, send `X-Api-Key`. HTTP codes actually produced: 200, 400, 401, 404, 405, 500, 503, 504, 507.
+
+See [docs/API.md](docs/API.md).
+
+## Configuration
+
+Environment variables (see `.env.example`; `.env` files are not loaded automatically):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `YTCONV_BIND` | `127.0.0.1` | Listen address |
+| `YTCONV_PORT` | `8080` | Listen port |
+| `YTCONV_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+| `YTCONV_LOG_FORMAT` | `text` | `text` or `json` |
+| `YTCONV_OUTPUT_DIR` | `./output` | Media root |
+| `YTCONV_MAX_CONCURRENT` | `1` | API in-flight jobs |
+| `YTCONV_CHILD_TIMEOUT_SEC` | `900` | Kill hung yt-dlp/ffmpeg |
+| `YTCONV_YT_DLP` / `YTCONV_FFMPEG` | `yt-dlp` / `ffmpeg` | Binary paths (tests use fakes) |
+| `YTCONV_API_KEY` | empty | Required for remote bind |
+| `YTCONV_ALLOW_REMOTE` | unset | Must be `1` to bind all interfaces |
+| `YTCONV_LOG_URLS` | unset | Log reconstructed URLs at DEBUG only |
+
+INFO logs use `request_id` and `video_id`, not the user URL.
+
+## Project structure
+
+```
+YT-Converter/
+├── CMakeLists.txt
+├── src/cli/main.cpp
+├── src/api/server.cpp
+├── src/api/api_app.cpp
+├── src/core/converter.cpp
+├── src/utils/          # validation, process, logger, config, errors
+├── include/
+├── tests/              # GoogleTest + fake binaries
+├── docs/
+└── .github/workflows/
+```
+
+## Tests
+
 ```sh
-# Check available space
-df -h
-
-# Clean up old conversions
-rm MP3/*.mp3
-rm MP4/*.mp4
-rm WAV/*.wav
+cmake -S . -B build -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
-### Getting Help
+Tests do not call YouTube. `tests/fakes/` records argv and writes tiny fixtures. See [docs/TESTING.md](docs/TESTING.md).
 
-- Check the [Architecture](docs/ARCHITECTURE.md) documentation
-- Review existing [GitHub Issues](https://github.com/yourusername/YT-Converter/issues)
-- Open a new issue with detailed error messages and steps to reproduce
+`./quick-test.sh` configures, builds, and runs `ctest`.
 
----
+## Legal
 
-**Made with ❤️ by the YT-Converter team**
+Downloading YouTube media may violate YouTube's Terms of Service. This project ships as a local converter for content you are allowed to copy. Do not run it as an open converter on the public Internet.
 
-Last updated: 2025
+## License
+
+MIT. See [LICENSE](LICENSE).

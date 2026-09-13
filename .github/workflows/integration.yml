@@ -1,0 +1,16 @@
+name: Live integration
+
+on:
+  workflow_dispatch:
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Explain scope
+        run: |
+          echo "This job is manual only. It is not a PR gate."
+          echo "A live YouTube download is ToS-sensitive and flaky."
+          echo "Unit tests with fake binaries cover argv, cleanup, and errors."
+          exit 0

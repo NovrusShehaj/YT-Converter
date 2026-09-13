@@ -1,0 +1,15 @@
+# Personal localhost example. This does not publish a public converter.
+# Binding 127.0.0.1 inside the container is only reachable via network_mode: host.
+
+services:
+  yt2mp3-api:
+    build: .
+    network_mode: host
+    environment:
+      YTCONV_BIND: "127.0.0.1"
+      YTCONV_PORT: "8080"
+      YTCONV_OUTPUT_DIR: "/data/output"
+      YTCONV_ALLOW_UNAUTHENTICATED_LOCALHOST: "1"
+    volumes:
+      - ./output:/data/output
+    restart: "no"

@@ -1,0 +1,11 @@
+.git
+.github
+.cursor
+build
+build-*
+output
+docs
+tests
+*.md
+.env
+.env.*

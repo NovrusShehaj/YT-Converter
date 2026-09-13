@@ -1,220 +1,98 @@
-#include "converter.h"
-#include "validation.h"
+#include "api_app.h"
+#include "config.h"
+#include "dependencies.h"
+#include "error.h"
 #include "logger.h"
-#include <cpprest/http_listener.h>
-#include <cpprest/json.h>
-#include <csignal>
-#include <thread>
-#include <chrono>
-#include <atomic>
+#include "process.h"
+#include "version.h"
 
-using namespace web;
-using namespace web::http;
-using namespace web::http::experimental::listener;
+#include <iostream>
+#include <string>
 
-/**
- * @file server.cpp
- * @brief HTTP API server for YouTube converter
- * 
- * RESTful API endpoints:
- * GET /convert?url=<YouTube URL>&format=<mp3|mp4|wav>
- * 
- * Response (success):
- * {
- *   "status": "success",
- *   "output_file": "output_VIDEO_ID.FORMAT"
- * }
- * 
- * Response (error):
- * {
- *   "status": "error",
- *   "error": "Error description"
- * }
- */
+namespace {
 
-// Global flag for graceful shutdown
-static std::atomic<bool> shouldShutdown(false);
-
-/**
- * @brief Signal handler for graceful shutdown
- * @param signal The signal number
- */
-void signalHandler(int signal) {
-    auto& logger = yt::logger::Logger::getInstance();
-    if (signal == SIGINT) {
-        logger.info("Received SIGINT signal, shutting down gracefully...");
-        shouldShutdown = true;
+void printServerInfo(const yt::Config& config, bool unauthenticated) {
+    std::cout << "YouTube Converter API " << YTCONV_VERSION << '\n'
+              << "Listening on http://" << config.bind << ':' << config.port << '\n'
+              << "Endpoints:\n"
+              << "  POST /v1/conversions\n"
+              << "  GET  /v1/healthz\n"
+              << "  GET  /v1/readyz\n"
+              << "  GET  /v1/metrics   (loopback only)\n";
+    if (unauthenticated) {
+        std::cout << "Authentication: disabled (localhost only)\n";
+    } else {
+        std::cout << "Authentication: X-Api-Key required\n";
     }
+    std::cout << "Bind is loopback by default. Do not expose this service on the public internet.\n";
 }
 
-/**
- * @brief Handle HTTP GET requests for video conversion
- * @param request The HTTP request object
- */
-void handleRequest(http_request request) {
-    auto& logger = yt::logger::Logger::getInstance();
-    
-    try {
-        // Parse query parameters
-        auto queryParams = uri::split_query(request.request_uri().query());
-        
-        auto urlIt = queryParams.find(U("url"));
-        auto formatIt = queryParams.find(U("format"));
+} // namespace
 
-        // Validate that required parameters are present
-        if (urlIt == queryParams.end() || formatIt == queryParams.end()) {
-            logger.warning("Request missing required parameters");
-            
-            json::value errorResponse;
-            errorResponse[U("status")] = json::value::string(U("error"));
-            errorResponse[U("error")] = json::value::string(
-                U("Missing required parameters. Please provide 'url' and 'format'")
-            );
-            
-            request.reply(status_codes::BadRequest, errorResponse);
-            return;
+int main(int argc, char* argv[]) {
+    yt::Config config = yt::loadConfigFromEnv();
+
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        auto requireValue = [&](const std::string& name) -> std::string {
+            if (i + 1 >= argc) {
+                std::cerr << "Missing value for " << name << '\n';
+                std::exit(2);
+            }
+            return argv[++i];
+        };
+        if (arg == "--help" || arg == "-h") {
+            std::cout << "yt2mp3-api " << YTCONV_VERSION << "\n"
+                      << "Usage: " << argv[0] << " [options]\n"
+                      << "  --allow-unauthenticated-localhost\n"
+                      << "  --bind ADDRESS          default 127.0.0.1\n"
+                      << "  --port N                default 8080\n"
+                      << "  --output-dir DIR        default ./output\n"
+                      << "  --help, --version\n";
+            return 0;
         }
-
-        // Convert from wide strings to UTF-8
-        std::string url = utility::conversions::to_utf8string(urlIt->second);
-        std::string format = utility::conversions::to_utf8string(formatIt->second);
-
-        logger.info("API request received - URL: " + url + ", Format: " + format);
-        logger.debug("Client IP: " + request.remote_address());
-
-        // Validate input
-        auto validationError = yt::validation::validateConverterInput(url, format);
-        if (validationError) {
-            logger.warning("Validation failed: " + *validationError);
-            
-            json::value errorResponse;
-            errorResponse[U("status")] = json::value::string(U("error"));
-            errorResponse[U("error")] = json::value::string(
-                utility::conversions::to_string_t(*validationError)
-            );
-            
-            request.reply(status_codes::BadRequest, errorResponse);
-            return;
+        if (arg == "--version" || arg == "-V") {
+            std::cout << "yt2mp3-api " << YTCONV_VERSION << '\n';
+            return 0;
         }
-
-        // Process the video
-        logger.info("Starting video conversion via API");
-        std::string outputFile = yt::converter::processVideo(url, format);
-        
-        logger.info("API conversion successful: " + outputFile);
-
-        // Send success response
-        json::value successResponse;
-        successResponse[U("status")] = json::value::string(U("success"));
-        successResponse[U("output_file")] = json::value::string(
-            utility::conversions::to_string_t(outputFile)
-        );
-        successResponse[U("message")] = json::value::string(
-            utility::conversions::to_string_t("Video converted successfully")
-        );
-
-        request.reply(status_codes::OK, successResponse);
+        if (arg == "--allow-unauthenticated-localhost") {
+            config.allow_unauthenticated_localhost = true;
+        } else if (arg == "--bind") {
+            config.bind = requireValue(arg);
+        } else if (arg == "--port") {
+            try {
+                config.port = std::stoi(requireValue(arg));
+            } catch (const std::exception&) {
+                std::cerr << "Invalid --port value\n";
+                return 2;
+            }
+        } else if (arg == "--output-dir") {
+            config.output_dir = requireValue(arg);
+        } else {
+            std::cerr << "Unknown option: " << arg << '\n';
+            return 2;
+        }
     }
-    catch (const std::invalid_argument& e) {
-        auto& logger = yt::logger::Logger::getInstance();
-        logger.warning("Invalid argument error: " + std::string(e.what()));
-        
-        json::value errorResponse;
-        errorResponse[U("status")] = json::value::string(U("error"));
-        errorResponse[U("error")] = json::value::string(
-            utility::conversions::to_string_t(std::string(e.what()))
-        );
-        
-        request.reply(status_codes::BadRequest, errorResponse);
-    }
-    catch (const std::runtime_error& e) {
-        auto& logger = yt::logger::Logger::getInstance();
-        logger.error("Runtime error: " + std::string(e.what()));
-        
-        json::value errorResponse;
-        errorResponse[U("status")] = json::value::string(U("error"));
-        errorResponse[U("error")] = json::value::string(
-            utility::conversions::to_string_t(std::string(e.what()))
-        );
-        
-        request.reply(status_codes::InternalError, errorResponse);
-    }
-    catch (const std::exception& e) {
-        auto& logger = yt::logger::Logger::getInstance();
-        logger.critical("Unexpected error: " + std::string(e.what()));
-        
-        json::value errorResponse;
-        errorResponse[U("status")] = json::value::string(U("error"));
-        errorResponse[U("error")] = json::value::string(U("Internal server error"));
-        
-        request.reply(status_codes::InternalError, errorResponse);
-    }
-}
-
-/**
- * @brief Print server information and usage
- */
-void printServerInfo() {
-    std::cout << "\n" << std::string(60, '=') << std::endl;
-    std::cout << "YouTube Converter - REST API Server" << std::endl;
-    std::cout << std::string(60, '=') << std::endl;
-    std::cout << "\nServer started on http://localhost:8080" << std::endl;
-    std::cout << "\nAPI Endpoint:" << std::endl;
-    std::cout << "  GET /convert?url=<URL>&format=<FORMAT>" << std::endl;
-    std::cout << "\nParameters:" << std::endl;
-    std::cout << "  url    - YouTube video URL" << std::endl;
-    std::cout << "  format - Output format (mp3, mp4, or wav)" << std::endl;
-    std::cout << "\nExample Request:" << std::endl;
-    std::cout << "  http://localhost:8080/convert?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ&format=mp3" << std::endl;
-    std::cout << "\nPress Ctrl+C to stop the server" << std::endl;
-    std::cout << std::string(60, '=') << std::endl << std::endl;
-}
-
-int main() {
-    auto& logger = yt::logger::Logger::getInstance();
-    
-    // Configure logger for API server
-    logger.setLogLevel(yt::logger::LogLevel::DEBUG);
-
-    logger.info("Initializing YouTube Converter API Server");
-
-    // Set up signal handler for graceful shutdown
-    signal(SIGINT, signalHandler);
 
     try {
-        // Create HTTP listener on port 8080
-        http_listener listener(U("http://localhost:8080"));
-        
-        // Set up request handler for /convert endpoint
-        listener.support(methods::GET, handleRequest);
-
-        logger.info("Starting HTTP listener...");
-        
-        // Open the listener
-        listener
-            .open()
-            .then([&listener]() {
-                auto& logger = yt::logger::Logger::getInstance();
-                logger.info("HTTP listener opened successfully");
-            })
-            .wait();
-
-        printServerInfo();
-
-        // Keep the server running until shutdown signal
-        while (!shouldShutdown) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        yt::validateApiConfig(config);
+        yt::applyLogConfig(config);
+        auto& logger = yt::logger::Logger::getInstance();
+        logger.info("Starting yt2mp3-api " YTCONV_VERSION);
+        const auto tools = yt::deps::checkTools(config);
+        if (!tools.ok) {
+            logger.warning("Readiness will fail until tools are installed: " + tools.message);
         }
-
-        logger.info("Shutting down server...");
-        listener.close().wait();
-        logger.info("Server stopped");
-    }
-    catch (const std::exception& e) {
-        logger.critical("Server error: " + std::string(e.what()));
-        std::cerr << "Fatal error: " << e.what() << std::endl;
+        printServerInfo(config, config.api_key.empty());
+        yt::api::ApiServer server(config);
+        server.runUntilSignal();
+        yt::process::resetShutdownForTests();
+        return 0;
+    } catch (const yt::Error& error) {
+        std::cerr << error.message() << '\n';
+        return error.exitCode();
+    } catch (const std::exception& error) {
+        std::cerr << "Fatal error: " << error.what() << '\n';
         return 1;
     }
-
-    return 0;
 }

@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  release:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential pkg-config \
+            libboost-all-dev libssl-dev libcpprest-dev
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake boost cpprestsdk openssl
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF
+          cmake --build build --parallel
+      - name: Package
+        run: |
+          os_name=$(echo '${{ matrix.os }}' | tr '-' '_')
+          mkdir -p dist
+          cp build/yt2mp3-cli "dist/yt2mp3-cli-${os_name}"
+          if [ -f build/yt2mp3-api ]; then
+            cp build/yt2mp3-api "dist/yt2mp3-api-${os_name}"
+          fi
+          (cd dist && sha256sum * > SHA256SUMS-${os_name}.txt || shasum -a 256 * > SHA256SUMS-${os_name}.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os }}
+          path: dist/
+
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            Local CLI and optional localhost API.
+
+            Runtime requirements: `yt-dlp` and `ffmpeg` must be on PATH.
+            Windows binaries are not produced. Do not publish this as a public converter.
+          files: artifacts/**/*

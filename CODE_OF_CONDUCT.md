@@ -63,7 +63,7 @@ When reporting an incident, please provide:
 4. **Date and time** of the incident
 5. **Any relevant links** or screenshots
 
-**Report to:** [maintainers contact information]
+**Report to:** https://github.com/NovrusShehaj/YT-Converter/issues
 
 All reports will be treated with confidentiality. The identity of the reporter will be protected unless they wish to be named.
 

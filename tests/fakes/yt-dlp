@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+LOGDIR="${YTCONV_FAKE_LOG_DIR:-.}"
+mkdir -p "$LOGDIR"
+printf '%s\n' "$@" > "$LOGDIR/yt-dlp.argv"
+echo 1 >> "$LOGDIR/yt-dlp.count"
+
+out=""
+prev=""
+for arg in "$@"; do
+  if [[ "$prev" == "-o" ]]; then
+    out="$arg"
+  fi
+  prev="$arg"
+done
+
+if [[ -n "$out" ]]; then
+  out="${out//\%(ext)s/mp4}"
+  mkdir -p "$(dirname "$out")"
+  printf 'FAKE' > "$out"
+fi
+exit 0
