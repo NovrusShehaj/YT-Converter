@@ -8,9 +8,40 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Explain scope
+      - name: Install dependencies
         run: |
-          echo "This job is manual only. It is not a PR gate."
-          echo "A live YouTube download is ToS-sensitive and flaky."
-          echo "Unit tests with fake binaries cover argv, cleanup, and errors."
-          exit 0
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg python3-pip curl
+          pip3 install yt-dlp==2024.12.28
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_API=ON
+          cmake --build build --parallel
+      - name: Start API
+        run: |
+          YTCONV_ALLOW_UNAUTHENTICATED_LOCALHOST=1 \
+          YTCONV_LOG_LEVEL=INFO \
+          YTCONV_OUTPUT_DIR=/tmp/ytconv-out \
+          ./build/yt2mp3-api --port 8765 &
+          API_PID=$!
+          sleep 2
+          echo "API_PID=$API_PID" >> $GITHUB_ENV
+      - name: Convert test video
+        run: |
+          curl -sS -X POST http://127.0.0.1:8765/v1/conversions \
+            -H 'Content-Type: application/json' \
+            -d '{"url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","format":"mp3"}' \
+            -o /tmp/response.json
+          cat /tmp/response.json
+      - name: Check output
+        run: |
+          if [ -f /tmp/ytconv-out/dQw4w9WgXcQ.mp3 ]; then
+            echo "Output file created"
+            ls -la /tmp/ytconv-out/dQw4w9WgXcQ.mp3
+          else
+            echo "Output file not found"
+            exit 1
+          fi
+      - name: Cleanup
+        run: |
+          kill $API_PID 2>/dev/null || true

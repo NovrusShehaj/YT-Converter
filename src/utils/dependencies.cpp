@@ -4,6 +4,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <mutex>
+#include <atomic>
 
 namespace yt::deps {
 namespace {
@@ -64,6 +67,28 @@ void requireTools(const Config& config) {
     if (!result.ok) {
         throw Error(ErrorCode::BinaryNotFound, result.message);
     }
+}
+
+// Cached tool check
+static std::mutex g_readyCacheMutex;
+static std::atomic<std::int64_t> g_readyCacheTime{0};
+static PreflightResult g_readyCache;
+
+PreflightResult checkToolsCached(const Config& config, int ttl_sec) {
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    
+    std::lock_guard<std::mutex> lock(g_readyCacheMutex);
+    if (g_readyCache.ok && (now - g_readyCacheTime.load()) < ttl_sec) {
+        return g_readyCache;
+    }
+    
+    PreflightResult result = checkTools(config);
+    if (result.ok) {
+        g_readyCache = result;
+        g_readyCacheTime.store(now);
+    }
+    return result;
 }
 
 } // namespace yt::deps

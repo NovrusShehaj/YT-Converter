@@ -51,6 +51,55 @@ int envInt(const char* name, int fallback, int minValue, int maxValue) {
 
 } // namespace
 
+int64_t parseHumanSize(const std::string& value) {
+    if (value.empty()) {
+        throw Error(ErrorCode::ConfigError, "YTCONV_MAX_FILESIZE is empty");
+    }
+    std::string v = value;
+    std::transform(v.begin(), v.end(), v.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    int64_t multiplier = 1;
+    // Check for two-character suffixes first (KB, MB, GB)
+    if (v.size() >= 2) {
+        std::string suffix = v.substr(v.size() - 2);
+        if (suffix == "kb") {
+            multiplier = 1000;
+            v = v.substr(0, v.size() - 2);
+        } else if (suffix == "mb") {
+            multiplier = 1000 * 1000;
+            v = v.substr(0, v.size() - 2);
+        } else if (suffix == "gb") {
+            multiplier = 1000 * 1000 * 1000;
+            v = v.substr(0, v.size() - 2);
+        }
+    }
+    // Then check for single-character suffixes (K, M, G)
+    if (multiplier == 1 && v.size() >= 1) {
+        char last = v.back();
+        if (last == 'k') {
+            multiplier = 1024;
+            v.pop_back();
+        } else if (last == 'm') {
+            multiplier = 1024 * 1024;
+            v.pop_back();
+        } else if (last == 'g') {
+            multiplier = 1024 * 1024 * 1024;
+            v.pop_back();
+        }
+    }
+    try {
+        const int64_t size = std::stoll(v);
+        if (size <= 0) {
+            throw Error(ErrorCode::ConfigError, "YTCONV_MAX_FILESIZE must be positive");
+        }
+        return size * multiplier;
+    } catch (const Error&) {
+        throw;
+    } catch (const std::exception&) {
+        throw Error(ErrorCode::ConfigError, "YTCONV_MAX_FILESIZE must be a number such as 500M or 1G");
+    }
+}
+
 bool isLoopbackBind(const std::string& bind) {
     return bind == "127.0.0.1" || bind == "localhost" || bind == "::1";
 }
@@ -80,11 +129,25 @@ Config loadConfigFromEnv() {
     config.max_concurrent = envInt("YTCONV_MAX_CONCURRENT", config.max_concurrent, 1, 32);
     config.child_timeout_sec =
         envInt("YTCONV_CHILD_TIMEOUT_SEC", config.child_timeout_sec, 1, 86400);
+    config.download_timeout_sec =
+        envInt("YTCONV_DOWNLOAD_TIMEOUT_SEC", config.download_timeout_sec, 1, 86400);
+    config.convert_timeout_sec =
+        envInt("YTCONV_CONVERT_TIMEOUT_SEC", config.convert_timeout_sec, 1, 86400);
     config.socket_timeout_sec =
         envInt("YTCONV_SOCKET_TIMEOUT_SEC", config.socket_timeout_sec, 1, 300);
-    config.max_filesize = trimCopy(envOr("YTCONV_MAX_FILESIZE", config.max_filesize));
+    std::string maxFilesizeStr = trimCopy(envOr("YTCONV_MAX_FILESIZE", config.max_filesize));
+    config.max_filesize = maxFilesizeStr;
+    config.max_filesize_bytes = parseHumanSize(maxFilesizeStr);
+    if (config.max_filesize_bytes <= 0) {
+        config.max_filesize_bytes = 500 * 1024 * 1024;
+    }
     config.retries = envInt("YTCONV_RETRIES", config.retries, 0, 10);
+    config.concurrent_fragments =
+        envInt("YTCONV_CONCURRENT_FRAGMENTS", config.concurrent_fragments, 1, 16);
+    config.fragment_retries =
+        envInt("YTCONV_FRAGMENT_RETRIES", config.fragment_retries, 0, 100);
     config.max_height = envInt("YTCONV_MAX_HEIGHT", config.max_height, 144, 4320);
+    config.cache_dir = trimCopy(envOr("YTCONV_CACHE_DIR", config.cache_dir));
     config.yt_dlp_path = trimCopy(envOr("YTCONV_YT_DLP", config.yt_dlp_path));
     config.ffmpeg_path = trimCopy(envOr("YTCONV_FFMPEG", config.ffmpeg_path));
     config.api_key = envOr("YTCONV_API_KEY", "");

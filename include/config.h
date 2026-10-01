@@ -13,10 +13,16 @@ struct Config {
     std::string output_dir = "./output";
     int max_concurrent = 1;
     int child_timeout_sec = 900;
+    int download_timeout_sec = 600;
+    int convert_timeout_sec = 300;
     int socket_timeout_sec = 30;
     std::string max_filesize = "500M";
+    int64_t max_filesize_bytes = 500 * 1024 * 1024;
     int retries = 2;
+    int concurrent_fragments = 4;
+    int fragment_retries = 10;
     int max_height = 1080;
+    std::string cache_dir = ".yt-dlp-cache";
     std::string yt_dlp_path = "yt-dlp";
     std::string ffmpeg_path = "ffmpeg";
     std::string api_key;
@@ -35,6 +41,7 @@ bool isWildcardBind(const std::string& bind);
 bool constantTimeEquals(const std::string& left, const std::string& right);
 void validateApiConfig(const Config& config);
 std::string resolveOutputRoot(const std::string& output_dir);
+int64_t parseHumanSize(const std::string& value);
 
 } // namespace yt
 

@@ -1,5 +1,7 @@
 # YT-Converter Production-Readiness Plan
 
+> **Superseded.** This audit describes an older tree (`system()`, unanchored URL checks, no tests). The current code on `dev/api-improvements` already fixed those issues. Use [production-performance-plan.md](production-performance-plan.md) for the speed and production plan.
+
 ## 1. Executive Summary and Scope Confirmation
 
 ### Repository identity

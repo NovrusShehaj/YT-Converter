@@ -70,6 +70,8 @@ set(CORE_SOURCES
     ${YTCONV_SRC_DIR}/utils/job_limiter.cpp
     ${YTCONV_SRC_DIR}/utils/dependencies.cpp
     ${YTCONV_SRC_DIR}/utils/metrics.cpp
+    ${YTCONV_SRC_DIR}/utils/job_queue.cpp
+    ${YTCONV_SRC_DIR}/utils/singleflight.cpp
 )
 
 add_library(yt-converter-core STATIC ${CORE_SOURCES})

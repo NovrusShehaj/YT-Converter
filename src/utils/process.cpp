@@ -109,15 +109,34 @@ int makePipe(int fds[2]) {
 #endif
 }
 
-void drainFd(int fd, std::string& buffer, std::size_t maxBytes) {
-    char chunk[1024];
+void drainFd(int fd, std::string& buffer, std::size_t maxBytes, RunOptions::LineCallback onLine,
+                void* onLineUser) {
+    char chunk[4096];
+    std::string line;
     while (true) {
         const ssize_t n = ::read(fd, chunk, sizeof(chunk));
         if (n > 0) {
+            for (ssize_t i = 0; i < n; ++i) {
+                const char c = chunk[i];
+                if (c == '\n') {
+                    if (onLine) {
+                        onLine(line, onLineUser);
+                    }
+                    line.clear();
+                    continue;
+                }
+                if (c == '\r') {
+                    continue;
+                }
+                line.push_back(c);
+            }
             appendBounded(buffer, chunk, static_cast<std::size_t>(n), maxBytes);
             continue;
         }
         break;
+    }
+    if (!line.empty() && onLine) {
+        onLine(line, onLineUser);
     }
 }
 
@@ -273,11 +292,35 @@ RunResult runPosix(const std::vector<std::string>& argv, const RunOptions& optio
             char chunk[1024];
             if (outIndex >= 0 && (fds[outIndex].revents & POLLIN)) {
                 const ssize_t n = ::read(outRead.fd, chunk, sizeof(chunk));
-                if (n > 0) {
-                    appendBounded(result.stdout_text, chunk, static_cast<std::size_t>(n),
+                if (n > 0) {                        appendBounded(result.stdout_text, chunk, static_cast<std::size_t>(n),
                                   options.max_output_bytes);
                 } else if (n == 0) {
                     outRead.close();
+                }
+                if (outIndex >= 0 && options.on_line) {
+                    std::string line;
+                    for (const char c : chunk) {
+                        if (c == '\n') {
+                            if (options.on_line) {
+                                options.on_line(line, options.on_line_user);
+                            }
+                            line.clear();
+                        } else if (c != '\r') {
+                            line.push_back(c);
+                        }
+                    }
+                } else if (outIndex >= 0 && options.on_line) {
+                    std::string line;
+                    for (const char c : chunk) {
+                        if (c == '\n') {
+                            if (options.on_line) {
+                                options.on_line(line, options.on_line_user);
+                            }
+                            line.clear();
+                        } else if (c != '\r') {
+                            line.push_back(c);
+                        }
+                    }
                 }
             }
             if (errIndex >= 0 && (fds[errIndex].revents & POLLIN)) {
@@ -288,6 +331,19 @@ RunResult runPosix(const std::vector<std::string>& argv, const RunOptions& optio
                 } else if (n == 0) {
                     errRead.close();
                 }
+                if (errIndex >= 0 && options.on_line) {
+                    std::string line;
+                    for (const char c : chunk) {
+                        if (c == '\n') {
+                            if (options.on_line) {
+                                options.on_line(line, options.on_line_user);
+                            }
+                            line.clear();
+                        } else if (c != '\r') {
+                            line.push_back(c);
+                        }
+                    }
+                }
             }
         }
 
@@ -295,10 +351,12 @@ RunResult runPosix(const std::vector<std::string>& argv, const RunOptions& optio
         const pid_t waited = ::waitpid(pid, &status, WNOHANG);
         if (waited == pid) {
             if (outRead.fd >= 0) {
-                drainFd(outRead.fd, result.stdout_text, options.max_output_bytes);
+                drainFd(outRead.fd, result.stdout_text, options.max_output_bytes, options.on_line,
+                         options.on_line_user);
             }
             if (errRead.fd >= 0) {
-                drainFd(errRead.fd, result.stderr_text, options.max_output_bytes);
+                drainFd(errRead.fd, result.stderr_text, options.max_output_bytes, options.on_line,
+                         options.on_line_user);
             }
             if (WIFEXITED(status)) {
                 result.exit_code = WEXITSTATUS(status);
@@ -438,7 +496,31 @@ RunResult runWindows(const std::vector<std::string>& argv, const RunOptions& opt
     registerChild(pi.hProcess);
 
     const DWORD waitMs = options.timeout_ms < 0 ? INFINITE : static_cast<DWORD>(options.timeout_ms);
-    const DWORD waited = WaitForSingleObject(pi.hProcess, waitMs);
+    DWORD waited = WAIT_TIMEOUT;
+    auto drainUntilExit = [&]() {
+        while (waited == WAIT_TIMEOUT && !g_shutdown.load()) {
+            char chunk[4096];
+            DWORD n = 0;
+            if (outRead && ReadFile(outRead, chunk, sizeof(chunk), &n, nullptr) && n > 0) {
+                appendBounded(result.stdout_text, chunk, n, options.max_output_bytes);
+            }
+            if (errRead && ReadFile(errRead, chunk, sizeof(chunk), &n, nullptr) && n > 0) {
+                appendBounded(result.stderr_text, chunk, n, options.max_output_bytes);
+            }
+            if (outRead && !PeekNamedPipe(outRead, nullptr, 0, nullptr, nullptr, nullptr)) {
+                outRead = nullptr;
+            }
+            if (errRead && !PeekNamedPipe(errRead, nullptr, 0, nullptr, nullptr, nullptr)) {
+                errRead = nullptr;
+            }
+            waited = WaitForSingleObject(pi.hProcess, 50);
+        }
+    };
+    if (outRead || errRead) {
+        drainUntilExit();
+    } else {
+        waited = WaitForSingleObject(pi.hProcess, waitMs);
+    }
     if (waited == WAIT_TIMEOUT || g_shutdown.load()) {
         result.timed_out = waited == WAIT_TIMEOUT;
         result.canceled = g_shutdown.load() && waited != WAIT_TIMEOUT;

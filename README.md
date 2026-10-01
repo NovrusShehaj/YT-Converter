@@ -95,9 +95,9 @@ Finished files are `<output-dir>/<id>.<fmt>`. The absolute path is printed on su
 
 | Format | Tooling | Notes |
 |---|---|---|
-| MP3 | `bestaudio` then ffmpeg `libmp3lame` | 44100 Hz, stereo, 192 kbps |
-| WAV | `bestaudio` then ffmpeg `pcm_s16le` | 44100 Hz, stereo |
-| MP4 | video+audio merge, max height 1080 | ffmpeg `-c copy` |
+| MP3 | audio-only selector then ffmpeg `libmp3lame` | 44100 Hz, stereo, 192 kbps |
+| WAV | audio-only selector then ffmpeg `pcm_s16le` | 44100 Hz, stereo |
+| MP4 | height-capped video+audio merge, max height 1080 | ffmpeg `-c copy`; remux skipped if already mp4 |
 
 ffmpeg always gets `-y -nostdin -hide_banner -loglevel error`.
 
@@ -115,15 +115,27 @@ curl -sS -X POST http://127.0.0.1:8080/v1/conversions \
   -d '{"url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","format":"mp3"}'
 ```
 
-Success:
+First request for a new video returns 202 `queued`:
+
+```json
+{
+  "status": "queued",
+  "error_code": "ok",
+  "job_id": "dQw4w9WgXcQ-mp3",
+  "status_url": "/v1/jobs/dQw4w9WgXcQ-mp3"
+}
+```
+
+Poll the status URL or check the output file. When the output already exists and `reuse_completed` is enabled, the API returns 200 with `reused: true`:
 
 ```json
 {
   "status": "success",
   "error_code": "ok",
-  "message": "Conversion completed",
+  "message": "Reused existing output",
   "output_path": "/abs/path/output/dQw4w9WgXcQ.mp3",
-  "job_id": "dQw4w9WgXcQ-1a2b3c4d"
+  "job_id": "dQw4w9WgXcQ-mp3",
+  "reused": true
 }
 ```
 
@@ -131,10 +143,12 @@ The response is JSON with an absolute `output_path`. Bytes are not streamed. The
 
 | Method | Path | Result |
 |---|---|---|
-| POST | `/v1/conversions` | Convert (JSON `url`, `format`) |
+| POST | `/v1/conversions` | Convert (JSON `url`, `format`) → 202 queued or 200 reused |
+| GET | `/v1/jobs/{job_id}` | Job status |
+| DELETE | `/v1/jobs/{job_id}` | Cancel job |
 | GET | `/v1/conversions` | 405 |
 | GET | `/v1/healthz` | Process up |
-| GET | `/v1/readyz` | Tools + writable output |
+| GET | `/v1/readyz` | Tools + writable output (cached 60s) |
 | GET | `/v1/metrics` | Loopback only |
 | GET | `/` | 404 |
 
@@ -153,8 +167,14 @@ Environment variables (see `.env.example`; `.env` files are not loaded automatic
 | `YTCONV_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
 | `YTCONV_LOG_FORMAT` | `text` | `text` or `json` |
 | `YTCONV_OUTPUT_DIR` | `./output` | Media root |
-| `YTCONV_MAX_CONCURRENT` | `1` | API in-flight jobs |
-| `YTCONV_CHILD_TIMEOUT_SEC` | `900` | Kill hung yt-dlp/ffmpeg |
+| `YTCONV_MAX_CONCURRENT` | `1` | Worker threads (also sets queue workers) |
+| `YTCONV_QUEUE_DEPTH` | `8` | Max queued jobs |
+| `YTCONV_CHILD_TIMEOUT_SEC` | `900` | Legacy; use `YTCONV_DOWNLOAD_TIMEOUT_SEC` and `YTCONV_CONVERT_TIMEOUT_SEC` |
+| `YTCONV_DOWNLOAD_TIMEOUT_SEC` | `600` | yt-dlp timeout |
+| `YTCONV_CONVERT_TIMEOUT_SEC` | `300` | ffmpeg timeout |
+| `YTCONV_CONCURRENT_FRAGMENTS` | `4` | yt-dlp fragment concurrency |
+| `YTCONV_FRAGMENT_RETRIES` | `10` | yt-dlp fragment retries |
+| `YTCONV_READY_TTL_SEC` | `60` | Readiness probe cache TTL |
 | `YTCONV_YT_DLP` / `YTCONV_FFMPEG` | `yt-dlp` / `ffmpeg` | Binary paths (tests use fakes) |
 | `YTCONV_API_KEY` | empty | Required for remote bind |
 | `YTCONV_ALLOW_REMOTE` | unset | Must be `1` to bind all interfaces |

@@ -34,7 +34,7 @@ yt2mp3-api          src/api/server.cpp + src/api/api_app.cpp
 
 `src/utils/process.cpp` uses `posix_spawnp` (Linux/macOS) with a new process group, stdin from `/dev/null`, bounded stdout/stderr capture, and a deadline. Timeout or API/CLI shutdown sends SIGTERM/SIGKILL to the group. Windows uses `CreateProcessW` without `cmd.exe`.
 
-yt-dlp flags include `--no-playlist`, `--newline`, `--socket-timeout`, `--max-filesize`, `--retries`. Audio formats use `bestaudio/best`. MP4 uses a height-capped mp4+m4a selector.
+yt-dlp flags include `--no-playlist`, `--newline`, `--socket-timeout`, `--max-filesize`, `--retries`, `--concurrent-fragments`, `--fragment-retries`, `--retry-sleep`, `--cache-dir`, `--no-mtime`, and `--merge-output-format mp4` for MP4. Audio formats use an audio-only selector (`ba[ext=m4a]/ba[ext=webm]/ba[ext=opus]/ba[acodec!=none]`) with no combined-format fallback. MP4 uses a height-capped mp4+m4a selector.
 
 ffmpeg flags include `-y -nostdin -hide_banner -loglevel error`.
 

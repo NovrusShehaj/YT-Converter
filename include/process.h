@@ -13,6 +13,9 @@ struct RunOptions {
     bool capture_stderr = true;
     bool inherit_stderr = false;
     std::size_t max_output_bytes = 8192;
+    using LineCallback = void (*)(const std::string& line, void* user);
+    LineCallback on_line = nullptr;
+    void* on_line_user = nullptr;
 };
 
 struct RunResult {

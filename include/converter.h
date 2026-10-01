@@ -3,6 +3,7 @@
 
 #include "config.h"
 
+#include <cstdint>
 #include <string>
 
 namespace yt::converter {
@@ -21,6 +22,9 @@ struct ConversionResult {
     std::string job_id;
     std::string video_id;
     bool reused = false;
+    std::uint64_t download_ms = 0;
+    std::uint64_t convert_ms = 0;
+    std::uint64_t bytes_downloaded = 0;
 };
 
 ConversionResult processVideo(const ConversionRequest& request);

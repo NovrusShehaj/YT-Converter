@@ -16,13 +16,17 @@ void recordStart() {
     counters.jobs_active.fetch_add(1);
 }
 
-void recordSuccess(std::uint64_t bytes) {
+void recordSuccess(std::uint64_t bytes, std::uint64_t download_ms, std::uint64_t convert_ms,
+                   std::uint64_t bytes_downloaded) {
     auto& counters = global();
     counters.jobs_succeeded.fetch_add(1);
     if (counters.jobs_active.load() > 0) {
         counters.jobs_active.fetch_sub(1);
     }
     counters.bytes_written.fetch_add(bytes);
+    counters.download_ms_total.fetch_add(download_ms);
+    counters.convert_ms_total.fetch_add(convert_ms);
+    counters.bytes_downloaded.fetch_add(bytes_downloaded);
 }
 
 void recordFailure() {
@@ -33,6 +37,18 @@ void recordFailure() {
     }
 }
 
+void recordDownloadMs(std::uint64_t ms) {
+    global().download_ms_total.fetch_add(ms);
+}
+
+void recordConvertMs(std::uint64_t ms) {
+    global().convert_ms_total.fetch_add(ms);
+}
+
+void recordBytesDownloaded(std::uint64_t bytes) {
+    global().bytes_downloaded.fetch_add(bytes);
+}
+
 std::string toJson() {
     const auto& counters = global();
     std::ostringstream ss;
@@ -40,7 +56,11 @@ std::string toJson() {
        << ",\"jobs_succeeded\":" << counters.jobs_succeeded.load()
        << ",\"jobs_failed\":" << counters.jobs_failed.load()
        << ",\"jobs_active\":" << counters.jobs_active.load()
-       << ",\"bytes_written\":" << counters.bytes_written.load() << '}';
+       << ",\"bytes_written\":" << counters.bytes_written.load()
+       << ",\"download_ms_total\":" << counters.download_ms_total.load()
+       << ",\"convert_ms_total\":" << counters.convert_ms_total.load()
+       << ",\"queue_ms_total\":" << counters.queue_ms_total.load()
+       << ",\"bytes_downloaded\":" << counters.bytes_downloaded.load() << '}';
     return ss.str();
 }
 

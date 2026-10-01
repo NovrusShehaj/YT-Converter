@@ -13,3 +13,5 @@ services:
     volumes:
       - ./output:/data/output
     restart: "no"
+    mem_limit: 512m
+    cpus: 1.5

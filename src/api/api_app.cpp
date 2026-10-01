@@ -3,6 +3,7 @@
 #include "dependencies.h"
 #include "error.h"
 #include "job_limiter.h"
+#include "job_queue.h"
 #include "logger.h"
 #include "metrics.h"
 #include "process.h"
@@ -53,6 +54,19 @@ std::string makeRequestId() {
     return ss.str();
 }
 
+bool isSafeJobId(const std::string& id) {
+    if (id.empty() || id.size() > 80) {
+        return false;
+    }
+    for (char ch : id) {
+        const unsigned char c = static_cast<unsigned char>(ch);
+        if (!std::isalnum(c) && ch != '_' && ch != '-') {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool isLoopbackRemote(const std::string& remote) {
     return remote.find("127.0.0.1") != std::string::npos || remote.find("::1") != std::string::npos ||
            remote == "localhost";
@@ -96,6 +110,7 @@ public:
 
     Config config;
     JobLimiter limiter;
+    jobs::Queue jobQueue;
     std::unique_ptr<http_listener> listener;
     std::atomic<bool> running{false};
 
@@ -142,8 +157,11 @@ public:
         std::string requestId = makeRequestId();
         if (request.headers().has(U("X-Request-Id"))) {
             requestId = toUtf8(request.headers().find(U("X-Request-Id"))->second);
-            if (requestId.size() > 64) {
-                requestId.resize(64);
+            // Only accept safe characters: A-Za-z0-9_- and max 64 chars
+            if (!std::all_of(requestId.begin(), requestId.end(), [](char c) {
+                    return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-';
+                }) || requestId.size() > 64) {
+                requestId = makeRequestId();
             }
         }
         logger.setContext({requestId, {}});
@@ -162,8 +180,30 @@ public:
                 logger.clearContext();
                 return;
             }
+            if (path.rfind("/v1/jobs/", 0) == 0 && method == methods::GET) {
+                const std::string jobId = path.substr(strlen("/v1/jobs/"));
+                if (!isSafeJobId(jobId)) {
+                    replyJson(request, 404, errorBody(ErrorCode::InvalidInput, "Not found"));
+                    logger.clearContext();
+                    return;
+                }
+                handleJobStatus(request, jobId);
+                logger.clearContext();
+                return;
+            }
+            if (path.rfind("/v1/jobs/", 0) == 0 && method == methods::DELETE) {
+                const std::string jobId = path.substr(strlen("/v1/jobs/"));
+                if (!isSafeJobId(jobId)) {
+                    replyJson(request, 404, errorBody(ErrorCode::InvalidInput, "Not found"));
+                    logger.clearContext();
+                    return;
+                }
+                handleJobCancel(request, jobId);
+                logger.clearContext();
+                return;
+            }
             if (path == "/v1/readyz" && method == methods::GET) {
-                const auto tools = yt::deps::checkTools(config);
+                const auto tools = yt::deps::checkToolsCached(config);
                 if (!tools.ok || !outputWritable()) {
                     const std::string message =
                         tools.ok ? "Output directory is not writable" : tools.message;
@@ -220,9 +260,51 @@ public:
         logger.clearContext();
     }
 
+    void handleJobStatus(http_request& request, const std::string& jobId) {
+        auto& logger = yt::logger::Logger::getInstance();
+        auto* job = jobQueue.findJob(jobId);
+        if (!job) {
+            replyJson(request, 404, errorBody(ErrorCode::InvalidInput, "Job not found"));
+            return;
+        }
+        json::value body;
+        body[U("job_id")] = json::value::string(toT(job->job_id));
+        body[U("video_id")] = json::value::string(toT(job->video_id));
+        body[U("status")] = json::value::string(U("running"));
+        body[U("queued_at")] = json::value::string(toT(std::to_string(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                job->queued_at.time_since_epoch()).count())));
+        replyJson(request, 200, body);
+    }
+
+    void handleJobCancel(http_request& request, const std::string& jobId) {
+        auto& logger = yt::logger::Logger::getInstance();
+        auto* job = jobQueue.findJob(jobId);
+        if (!job) {
+            replyJson(request, 404, errorBody(ErrorCode::InvalidInput, "Job not found"));
+            return;
+        }
+        jobQueue.cancelJob(jobId);
+        json::value body;
+        body[U("job_id")] = json::value::string(toT(jobId));
+        body[U("status")] = json::value::string(U("canceled"));
+        replyJson(request, 200, body);
+    }
+
     void handleConvert(http_request& request, const std::string& requestId) {
         auto& logger = yt::logger::Logger::getInstance();
         json::value body;
+        
+        // Reject large bodies before parsing
+        utility::string_t contentType;
+        if (request.headers().has(U("Content-Type"))) {
+            contentType = request.headers().find(U("Content-Type"))->second;
+        }
+        if (contentType.find(U("application/json")) == utility::string_t::npos) {
+            replyJson(request, 400, errorBody(ErrorCode::InvalidInput, "Content-Type must be application/json"));
+            return;
+        }
+        
         try {
             body = request.extract_json().get();
         } catch (...) {
@@ -238,32 +320,60 @@ public:
 
         const std::string url = toUtf8(body.at(U("url")).as_string());
         const std::string format = toUtf8(body.at(U("format")).as_string());
-        logger.info("Conversion request received");
 
-        auto slot = limiter.tryAcquire();
-        if (!slot) {
-            replyJson(request, 503, errorBody(ErrorCode::Busy, "Too many concurrent conversions"));
+        // Validate first
+        std::optional<std::string> validationError = yt::validation::validateConverterInput(url, format);
+        if (validationError.has_value()) {
+            replyJson(request, 400, errorBody(ErrorCode::InvalidInput, validationError.value()));
             return;
         }
 
-        try {
-            yt::converter::ConversionRequest conversion;
-            conversion.url = url;
-            conversion.format = format;
-            conversion.config = config;
-            conversion.request_id = requestId;
-            const auto result = yt::converter::processVideo(conversion);
+        logger.info("Conversion request received");
+
+        // Check if output already exists
+        const auto video = yt::validation::parseYouTubeUrl(url);
+        const std::string videoId = video.video->id;
+        const std::string normalizedFormat = yt::validation::requireFormat(format);
+        const std::string outputFilename = yt::converter::getOutputFilename(videoId, normalizedFormat);
+        const fs::path outputRoot = fs::path(resolveOutputRoot(config.output_dir));
+        const fs::path finalPath = outputRoot / outputFilename;
+
+        if (config.reuse_completed && !config.force && fs::exists(finalPath) && fs::file_size(finalPath) > 0) {
             json::value ok;
             ok[U("status")] = json::value::string(U("success"));
             ok[U("error_code")] = json::value::string(U("ok"));
-            ok[U("message")] = json::value::string(U("Conversion completed"));
-            ok[U("output_path")] = json::value::string(toT(result.output_path));
-            ok[U("job_id")] = json::value::string(toT(result.job_id));
+            ok[U("message")] = json::value::string(U("Reused existing output"));
+            ok[U("output_path")] = json::value::string(toT(fs::weakly_canonical(finalPath).string()));
+            ok[U("job_id")] = json::value::string(toT(videoId + "-" + normalizedFormat));
+            ok[U("reused")] = json::value::boolean(true);
             replyJson(request, 200, ok);
-        } catch (const yt::Error& error) {
-            logger.warning(error.message());
-            replyJson(request, error.httpStatus(), errorBody(error));
+            return;
         }
+
+        // Create job and enqueue
+        const std::string jobId = videoId + "-" + normalizedFormat;
+        yt::converter::ConversionRequest conversion;
+        conversion.url = url;
+        conversion.format = format;
+        conversion.config = config;
+        conversion.request_id = requestId;
+        conversion.job_id = jobId;
+        conversion.show_progress = (config.log_level != "ERROR");
+
+        yt::jobs::QueuedJob queuedJob;
+        queuedJob.job_id = jobId;
+        queuedJob.video_id = videoId;
+        queuedJob.request = conversion;
+        queuedJob.queued_at = std::chrono::steady_clock::now();
+
+        jobQueue.enqueue(queuedJob);
+
+        json::value queued;
+        queued[U("status")] = json::value::string(U("queued"));
+        queued[U("error_code")] = json::value::string(U("ok"));
+        queued[U("job_id")] = json::value::string(toT(jobId));
+        queued[U("status_url")] = json::value::string(toT("/v1/jobs/" + jobId));
+        replyJson(request, 202, queued);
     }
 };
 
@@ -280,6 +390,9 @@ void ApiServer::start() {
     if (impl_->running.load()) {
         return;
     }
+    impl_->jobQueue.setWorkerCount(config.max_concurrent);
+    impl_->jobQueue.setQueueDepth(8);
+    impl_->jobQueue.start();
     impl_->listener = std::make_unique<http_listener>(toT(impl_->url()));
     auto* impl = impl_.get();
     impl_->listener->support(methods::GET, [impl](const http_request& request) { impl->handle(request); });
@@ -293,6 +406,7 @@ void ApiServer::stop() {
     if (!impl_->running.exchange(false) && !impl_->listener) {
         return;
     }
+    impl_->jobQueue.stop();
     if (impl_->listener) {
         impl_->listener->close().wait();
         impl_->listener.reset();

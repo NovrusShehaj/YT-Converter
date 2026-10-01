@@ -155,10 +155,31 @@ std::string videoFormatSelector(int maxHeight) {
     return ss.str();
 }
 
+std::string audioFormatSelector() {
+    return "ba[ext=m4a]/ba[ext=webm]/ba[ext=opus]/ba[acodec!=none]";
+}
+
 void downloadMedia(const ConversionRequest& request, const validation::VideoRef& video,
-                   const fs::path& jobDir) {
+                   const fs::path& jobDir, const fs::path& tempOutput, bool& ffmpegNeeded) {
     const bool audioOnly = request.format == "mp3" || request.format == "wav";
-    const fs::path outputTemplate = jobDir / "source.%(ext)s";
+    const bool isMp4 = request.format == "mp4";
+    std::string outputTemplate;
+    fs::path downloadOutput;
+    if (isMp4) {
+        ffmpegNeeded = false;
+        downloadOutput = tempOutput;
+        if (request.config.force || !fs::exists(downloadOutput)) {
+            fs::path parent = downloadOutput.parent_path();
+            if (!parent.empty() && !fs::exists(parent)) {
+                fs::create_directories(parent);
+            }
+        }
+        outputTemplate = downloadOutput.string();
+    } else {
+        ffmpegNeeded = true;
+        outputTemplate = (jobDir / "source.%(ext)s").string();
+        downloadOutput = jobDir / "source.%(ext)s";
+    }
     std::vector<std::string> argv{
         request.config.yt_dlp_path,
         "--no-playlist",
@@ -169,10 +190,19 @@ void downloadMedia(const ConversionRequest& request, const validation::VideoRef&
         request.config.max_filesize,
         "--retries",
         std::to_string(request.config.retries),
+        "--concurrent-fragments",
+        std::to_string(request.config.concurrent_fragments),
+        "--fragment-retries",
+        std::to_string(request.config.fragment_retries),
+        "--retry-sleep", "linear=1::2",
+        "--no-mtime",
+        "--cache-dir",
+        request.config.cache_dir,
+        "--merge-output-format", "mp4",
         "-f",
-        audioOnly ? "bestaudio/best" : videoFormatSelector(request.config.max_height),
+        audioOnly ? audioFormatSelector() : videoFormatSelector(request.config.max_height),
         "-o",
-        outputTemplate.string(),
+        outputTemplate,
         video.canonical_url,
     };
 
@@ -183,19 +213,31 @@ void downloadMedia(const ConversionRequest& request, const validation::VideoRef&
     }
 
     yt::process::RunOptions options;
-    options.timeout_ms = request.config.child_timeout_sec * 1000;
+    options.timeout_ms = request.config.download_timeout_sec * 1000;
     options.inherit_stderr = request.show_progress;
     const auto result = yt::process::run(argv, options);
     if (result.exit_code != 0 || result.not_found || result.timed_out || result.canceled) {
         throwSpawnError(ErrorCode::DownloadFailed, request.config.yt_dlp_path, result);
     }
-    if (findSourceFile(jobDir).empty()) {
-        throw Error(ErrorCode::DownloadFailed, "yt-dlp completed without creating a source file");
+    // For MP4, yt-dlp writes directly to downloadOutput; for other formats, check source file
+    if (isMp4) {
+        if (!fs::exists(downloadOutput) || fs::file_size(downloadOutput) == 0) {
+            throw Error(ErrorCode::DownloadFailed, "yt-dlp completed without creating an output file");
+        }
+    } else {
+        if (findSourceFile(jobDir).empty()) {
+            throw Error(ErrorCode::DownloadFailed, "yt-dlp completed without creating a source file");
+        }
     }
 }
 
 void convertMedia(const ConversionRequest& request, const fs::path& source,
-                  const fs::path& outputFile) {
+                  const fs::path& outputFile, bool ffmpegNeeded) {
+    if (!ffmpegNeeded) {
+        auto& logger = yt::logger::Logger::getInstance();
+        logger.info("Skipping ffmpeg remux for MP4");
+        return;
+    }
     std::vector<std::string> argv{
         request.config.ffmpeg_path,
         "-y",
@@ -220,7 +262,7 @@ void convertMedia(const ConversionRequest& request, const fs::path& source,
     logger.info("Converting to " + request.format);
 
     yt::process::RunOptions options;
-    options.timeout_ms = request.config.child_timeout_sec * 1000;
+    options.timeout_ms = request.config.convert_timeout_sec * 1000;
     options.inherit_stderr = request.show_progress;
     const auto result = yt::process::run(argv, options);
     if (result.exit_code != 0 || result.not_found || result.timed_out || result.canceled) {
@@ -314,7 +356,7 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
             reused.video_id = video.id;
             reused.reused = true;
             removeIfExists(jobDir);
-            yt::metrics::recordSuccess(fs::file_size(finalPath));
+            yt::metrics::recordSuccess(fs::file_size(finalPath), 0, 0, 0);
             return reused;
         }
 
@@ -327,29 +369,63 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
         JobWorkspace workspace(jobDir);
         const fs::path tempOutput = jobDir / getOutputFilename(video.id, request.format);
 
+        auto downloadStart = std::chrono::steady_clock::now();
+        bool ffmpegNeeded = true;
+        std::uint64_t bytesDownloaded = 0;
+        std::uint64_t download_ms = 0;
+        std::uint64_t convert_ms = 0;
         try {
-            downloadMedia(request, video, jobDir);
-            const fs::path source = findSourceFile(jobDir);
-            convertMedia(request, source, tempOutput);
-            if (!fs::exists(tempOutput) || fs::file_size(tempOutput) == 0) {
-                throw Error(ErrorCode::ConversionFailed, "ffmpeg produced an empty output file");
+            downloadMedia(request, video, jobDir, tempOutput, ffmpegNeeded);
+            const auto downloadEnd = std::chrono::steady_clock::now();
+            download_ms = std::chrono::duration_cast<std::chrono::milliseconds>(downloadEnd - downloadStart)
+                    .count();
+            if (ffmpegNeeded) {
+                const fs::path source = findSourceFile(jobDir);
+                if (source.empty()) {
+                    throw Error(ErrorCode::DownloadFailed,
+                                "yt-dlp completed without creating a source file");
+                }
+                const auto convertStart = std::chrono::steady_clock::now();
+                convertMedia(request, source, tempOutput, ffmpegNeeded);
+                const auto convertEnd = std::chrono::steady_clock::now();
+                convert_ms = std::chrono::duration_cast<std::chrono::milliseconds>(convertEnd - convertStart)
+                        .count();
+                yt::metrics::recordConvertMs(convert_ms);
+                if (!fs::exists(tempOutput) || fs::file_size(tempOutput) == 0) {
+                    throw Error(ErrorCode::ConversionFailed,
+                                "ffmpeg produced an empty output file");
+                }
+                bytesDownloaded = fs::file_size(source);
+            } else {
+                // For MP4, yt-dlp writes directly to tempOutput
+                if (!fs::exists(tempOutput) || fs::file_size(tempOutput) == 0) {
+                    throw Error(ErrorCode::DownloadFailed,
+                                "yt-dlp completed without creating an output file");
+                }
+                bytesDownloaded = fs::file_size(tempOutput);
             }
             fs::rename(tempOutput, finalPath);
             workspace.markSuccess();
             removeIfExists(jobDir);
+            yt::metrics::recordDownloadMs(download_ms);
+            yt::metrics::recordBytesDownloaded(bytesDownloaded);
+
+            ConversionResult result;
+            result.output_path = fs::weakly_canonical(finalPath).string();
+            result.job_id = request.job_id;
+            result.video_id = video.id;
+            result.download_ms = download_ms;
+            result.convert_ms = convert_ms;
+            result.bytes_downloaded = bytesDownloaded;
+            logger.info("Conversion completed");
+            yt::metrics::recordSuccess(fs::file_size(finalPath), download_ms, convert_ms,
+                                       bytesDownloaded);
+            return result;
         } catch (...) {
             removeIfExists(tempOutput);
             removeIfExists(finalPath);
             throw;
         }
-
-        ConversionResult result;
-        result.output_path = fs::weakly_canonical(finalPath).string();
-        result.job_id = request.job_id;
-        result.video_id = video.id;
-        logger.info("Conversion completed");
-        yt::metrics::recordSuccess(fs::file_size(finalPath));
-        return result;
     } catch (...) {
         yt::metrics::recordFailure();
         throw;

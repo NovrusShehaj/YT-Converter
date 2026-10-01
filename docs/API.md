@@ -26,19 +26,55 @@ Remote bind (`0.0.0.0` or `::`) is refused unless `YTCONV_ALLOW_REMOTE=1` and `Y
 
 Optional header: `X-Api-Key` when an API key is configured.
 
-### 200
+### Immediate reuse (output exists)
 
 ```json
 {
   "status": "success",
   "error_code": "ok",
-  "message": "Conversion completed",
-  "output_path": "/absolute/path/output/dQw4w9WgXcQ.mp3",
-  "job_id": "dQw4w9WgXcQ-1a2b3c4d"
+  "message": "Reused existing output",
+  "output_path": "/abs/output/dQw4w9WgXcQ.mp3",
+  "job_id": "dQw4w9WgXcQ-mp3",
+  "reused": true
 }
 ```
 
-`output_path` is an absolute filesystem path on the machine running the API.
+### Queued work
+
+```json
+{
+  "status": "queued",
+  "error_code": "ok",
+  "job_id": "dQw4w9WgXcQ-mp3",
+  "status_url": "/v1/jobs/dQw4w9WgXcQ-mp3"
+}
+```
+
+When the output file already exists and `reuse_completed` is enabled, the API returns 200 with `reused: true`. Otherwise it returns 202 `queued` and the conversion runs asynchronously.
+
+### Job status
+
+`GET /v1/jobs/{job_id}` returns the current job status.
+
+```json
+{
+  "job_id": "dQw4w9WgXcQ-mp3",
+  "video_id": "dQw4w9WgXcQ",
+  "status": "running",
+  "queued_at": "1234567890123"
+}
+```
+
+### Cancel job
+
+`DELETE /v1/jobs/{job_id}` cancels a running job.
+
+```json
+{
+  "job_id": "dQw4w9WgXcQ-mp3",
+  "status": "canceled"
+}
+```
 
 ### Errors
 
@@ -54,8 +90,9 @@ Optional header: `X-Api-Key` when an API key is configured.
 |---|---|
 | 400 | `invalid_url`, `unsupported_host`, `unsupported_format`, `playlist_only`, `channel_url`, `invalid_input` |
 | 401 | `unauthorized` |
-| 404 | unknown path |
+| 404 | unknown path, job not found |
 | 405 | GET `/v1/conversions` |
+| 409 | cancel of finished job |
 | 500 | `download_failed`, `conversion_failed`, `internal_error` |
 | 503 | `busy`, `binary_not_found`, shutdown |
 | 504 | `timeout` |
@@ -67,8 +104,20 @@ Optional header: `X-Api-Key` when an API key is configured.
 
 `GET /v1/healthz` → `{"status":"ok"}`
 
-`GET /v1/readyz` → 200 `{"status":"ready"}` if `yt-dlp` and `ffmpeg` respond and the output directory is writable; otherwise 503.
+`GET /v1/readyz` → 200 `{"status":"ready"}` if `yt-dlp` and `ffmpeg` respond and the output directory is writable; otherwise 503. Tool checks are cached for 60 seconds.
 
-`GET /v1/metrics` (loopback only) returns in-process counters.
+`GET /v1/metrics` (loopback only) returns in-process counters including `download_ms_total`, `convert_ms_total`, `queue_ms_total`, and `bytes_downloaded`.
 
 All responses include `Cache-Control: no-store`. There is no `Access-Control-Allow-Origin: *`.
+
+## Configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `YTCONV_MAX_CONCURRENT` | `1` | Worker threads (also sets queue workers) |
+| `YTCONV_QUEUE_DEPTH` | `8` | Max queued jobs |
+| `YTCONV_DOWNLOAD_TIMEOUT_SEC` | `600` | yt-dlp timeout |
+| `YTCONV_CONVERT_TIMEOUT_SEC` | `300` | ffmpeg timeout |
+| `YTCONV_CONCURRENT_FRAGMENTS` | `4` | yt-dlp fragment concurrency |
+| `YTCONV_FRAGMENT_RETRIES` | `10` | yt-dlp fragment retries |
+| `YTCONV_READY_TTL_SEC` | `60` | Readiness probe cache TTL |
