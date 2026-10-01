@@ -1,5 +1,6 @@
 #include "process.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -44,27 +45,45 @@ void appendBounded(std::string& buffer, const char* data, std::size_t n, std::si
     }
 }
 
-void consumeChunk(std::string& buffer, std::string& pending, const char* data, std::size_t n,
-                  std::size_t maxBytes, const RunOptions& options) {
-    appendBounded(buffer, data, n, maxBytes);
+// Pending callback line for one stream. Its storage never exceeds RunOptions::max_line_bytes.
+struct LineBuffer {
+    std::string pending;
+    bool discarding = false;
+};
+
+void deliverLine(LineBuffer& line, const RunOptions& options) {
+    // Reset before invoking the callback so a throwing callback leaves consistent state.
+    std::string text;
+    text.swap(line.pending);
+    line.discarding = false;
+    options.on_line(text, options.on_line_user);
+}
+
+void consumeChunk(std::string& buffer, LineBuffer& line, const char* data, std::size_t n,
+                  const RunOptions& options, RunResult& result) {
+    appendBounded(buffer, data, n, options.max_output_bytes);
     if (options.on_line == nullptr) {
         return;
     }
+    const std::size_t limit = std::max<std::size_t>(1, options.max_line_bytes);
     for (std::size_t i = 0; i < n; ++i) {
         const char c = data[i];
         if (c == '\n') {
-            options.on_line(pending, options.on_line_user);
-            pending.clear();
-        } else if (c != '\r') {
-            pending.push_back(c);
+            deliverLine(line, options);
+        } else if (c == '\r') {
+            continue;
+        } else if (line.pending.size() < limit) {
+            line.pending.push_back(c);
+            result.peak_line_bytes = std::max(result.peak_line_bytes, line.pending.size());
+        } else {
+            line.discarding = true;
         }
     }
 }
 
-void flushPending(std::string& pending, const RunOptions& options) {
-    if (!pending.empty() && options.on_line != nullptr) {
-        options.on_line(pending, options.on_line_user);
-        pending.clear();
+void flushPending(LineBuffer& line, const RunOptions& options) {
+    if (options.on_line != nullptr && (!line.pending.empty() || line.discarding)) {
+        deliverLine(line, options);
     }
 }
 
@@ -135,18 +154,53 @@ int makePipe(int fds[2]) {
 #endif
 }
 
-void drainFd(int fd, std::string& buffer, std::string& pending, std::size_t maxBytes,
-             const RunOptions& options) {
+void setNonBlocking(int fd) {
+    const int flags = ::fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) {
+        ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    }
+}
+
+// Reads whatever is available without blocking. A grandchild that inherited the pipe can keep it
+// open after the direct child exits, so a blocking drain could hang forever.
+void drainFd(int fd, std::string& buffer, LineBuffer& line, const RunOptions& options,
+             RunResult& result) {
     char chunk[4096];
     while (true) {
         const ssize_t n = ::read(fd, chunk, sizeof(chunk));
         if (n > 0) {
-            consumeChunk(buffer, pending, chunk, static_cast<std::size_t>(n), maxBytes, options);
+            consumeChunk(buffer, line, chunk, static_cast<std::size_t>(n), options, result);
+            continue;
+        }
+        if (n < 0 && errno == EINTR) {
             continue;
         }
         break;
     }
 }
+
+// Owns a spawned child until it is reaped. If run() unwinds early (for example a throwing line
+// callback), the destructor kills the process group, reaps the child, and unregisters it.
+class ChildGuard {
+  public:
+    explicit ChildGuard(pid_t pid) : pid_(pid) { registerChild(pid_); }
+    ChildGuard(const ChildGuard&) = delete;
+    ChildGuard& operator=(const ChildGuard&) = delete;
+    ~ChildGuard() {
+        if (!reaped_) {
+            killProcessGroup(pid_, SIGKILL);
+            int status = 0;
+            while (::waitpid(pid_, &status, 0) < 0 && errno == EINTR) {
+            }
+        }
+        unregisterChild(pid_);
+    }
+    void markReaped() { reaped_ = true; }
+
+  private:
+    pid_t pid_;
+    bool reaped_ = false;
+};
 
 RunResult runPosix(const std::vector<std::string>& argv, const RunOptions& options) {
     RunResult result;
@@ -248,10 +302,12 @@ RunResult runPosix(const std::vector<std::string>& argv, const RunOptions& optio
     if (outPipe[0] >= 0) {
         outRead = Fd(outPipe[0]);
         outPipe[0] = -1;
+        setNonBlocking(outRead.fd);
     }
     if (errPipe[0] >= 0) {
         errRead = Fd(errPipe[0]);
         errPipe[0] = -1;
+        setNonBlocking(errRead.fd);
     }
     cleanupSpawn();
 
@@ -262,15 +318,15 @@ RunResult runPosix(const std::vector<std::string>& argv, const RunOptions& optio
         return result;
     }
 
-    registerChild(pid);
+    ChildGuard child(pid);
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(options.timeout_ms);
     bool timedOut = false;
     bool canceled = false;
     bool cancelArmed = false;
     auto cancelKillAt = std::chrono::steady_clock::time_point{};
-    std::string outPending;
-    std::string errPending;
+    LineBuffer outLine;
+    LineBuffer errLine;
 
     auto armCancel = [&]() {
         if (cancelArmed || timedOut) {
@@ -315,22 +371,22 @@ RunResult runPosix(const std::vector<std::string>& argv, const RunOptions& optio
         }
         if (nfds > 0) {
             ::poll(fds, nfds, 100);
-            char chunk[1024];
-            if (outIndex >= 0 && (fds[outIndex].revents & (POLLIN | POLLHUP))) {
+            char chunk[4096];
+            if (outIndex >= 0 && (fds[outIndex].revents & (POLLIN | POLLHUP | POLLERR))) {
                 const ssize_t n = ::read(outRead.fd, chunk, sizeof(chunk));
                 if (n > 0) {
-                    consumeChunk(result.stdout_text, outPending, chunk, static_cast<std::size_t>(n),
-                                 options.max_output_bytes, options);
-                } else if (n == 0) {
+                    consumeChunk(result.stdout_text, outLine, chunk, static_cast<std::size_t>(n),
+                                 options, result);
+                } else if (n == 0 || (errno != EAGAIN && errno != EINTR)) {
                     outRead.close();
                 }
             }
-            if (errIndex >= 0 && (fds[errIndex].revents & (POLLIN | POLLHUP))) {
+            if (errIndex >= 0 && (fds[errIndex].revents & (POLLIN | POLLHUP | POLLERR))) {
                 const ssize_t n = ::read(errRead.fd, chunk, sizeof(chunk));
                 if (n > 0) {
-                    consumeChunk(result.stderr_text, errPending, chunk, static_cast<std::size_t>(n),
-                                 options.max_output_bytes, options);
-                } else if (n == 0) {
+                    consumeChunk(result.stderr_text, errLine, chunk, static_cast<std::size_t>(n),
+                                 options, result);
+                } else if (n == 0 || (errno != EAGAIN && errno != EINTR)) {
                     errRead.close();
                 }
             }
@@ -339,16 +395,15 @@ RunResult runPosix(const std::vector<std::string>& argv, const RunOptions& optio
         int status = 0;
         const pid_t waited = ::waitpid(pid, &status, WNOHANG);
         if (waited == pid) {
+            child.markReaped();
             if (outRead.fd >= 0) {
-                drainFd(outRead.fd, result.stdout_text, outPending, options.max_output_bytes,
-                        options);
+                drainFd(outRead.fd, result.stdout_text, outLine, options, result);
             }
             if (errRead.fd >= 0) {
-                drainFd(errRead.fd, result.stderr_text, errPending, options.max_output_bytes,
-                        options);
+                drainFd(errRead.fd, result.stderr_text, errLine, options, result);
             }
-            flushPending(outPending, options);
-            flushPending(errPending, options);
+            flushPending(outLine, options);
+            flushPending(errLine, options);
             if (WIFEXITED(status)) {
                 result.exit_code = WEXITSTATUS(status);
             } else if (WIFSIGNALED(status)) {
@@ -361,12 +416,10 @@ RunResult runPosix(const std::vector<std::string>& argv, const RunOptions& optio
         }
     }
 
-    unregisterChild(pid);
     result.timed_out = timedOut;
     result.canceled = canceled && !timedOut;
     return result;
 }
-
 #else
 
 std::wstring utf8ToWide(const std::string& value) {
@@ -485,16 +538,41 @@ RunResult runWindows(const std::vector<std::string>& argv, const RunOptions& opt
     CloseHandle(pi.hThread);
     registerChild(pi.hProcess);
 
+    // Releases the process and pipe handles on every exit path. If run() unwinds before the child
+    // has exited (for example a throwing line callback), the child is terminated first.
+    struct WinChildGuard {
+        HANDLE process;
+        HANDLE& out;
+        HANDLE& err;
+        bool exited = false;
+        ~WinChildGuard() {
+            if (!exited) {
+                TerminateProcess(process, 1);
+                WaitForSingleObject(process, 5000);
+            }
+            if (out) {
+                CloseHandle(out);
+                out = nullptr;
+            }
+            if (err) {
+                CloseHandle(err);
+                err = nullptr;
+            }
+            unregisterChild(process);
+            CloseHandle(process);
+        }
+    } guard{pi.hProcess, outRead, errRead};
+
     const auto deadline =
         std::chrono::steady_clock::now() +
         std::chrono::milliseconds(options.timeout_ms < 0 ? 86400000 : options.timeout_ms);
     bool cancelArmed = false;
     auto cancelKillAt = std::chrono::steady_clock::time_point{};
-    std::string outPending;
-    std::string errPending;
+    LineBuffer outLine;
+    LineBuffer errLine;
     DWORD waited = WAIT_TIMEOUT;
 
-    auto pump = [&](HANDLE handle, std::string& dest, std::string& pending) {
+    auto pump = [&](HANDLE handle, std::string& dest, LineBuffer& line) {
         if (!handle) {
             return;
         }
@@ -510,7 +588,7 @@ RunResult runWindows(const std::vector<std::string>& argv, const RunOptions& opt
             if (!ReadFile(handle, chunk, toRead, &n, nullptr) || n == 0) {
                 break;
             }
-            consumeChunk(dest, pending, chunk, n, options.max_output_bytes, options);
+            consumeChunk(dest, line, chunk, n, options, result);
             available -= n;
         }
     };
@@ -532,29 +610,21 @@ RunResult runWindows(const std::vector<std::string>& argv, const RunOptions& opt
             }
             TerminateProcess(pi.hProcess, 1);
         }
-        pump(outRead, result.stdout_text, outPending);
-        pump(errRead, result.stderr_text, errPending);
+        pump(outRead, result.stdout_text, outLine);
+        pump(errRead, result.stderr_text, errLine);
         waited = WaitForSingleObject(pi.hProcess, 50);
         if (waited == WAIT_OBJECT_0) {
-            pump(outRead, result.stdout_text, outPending);
-            pump(errRead, result.stderr_text, errPending);
-            flushPending(outPending, options);
-            flushPending(errPending, options);
+            guard.exited = true;
+            pump(outRead, result.stdout_text, outLine);
+            pump(errRead, result.stderr_text, errLine);
+            flushPending(outLine, options);
+            flushPending(errLine, options);
             break;
         }
     }
     DWORD code = 1;
     GetExitCodeProcess(pi.hProcess, &code);
     result.exit_code = static_cast<int>(code);
-
-    if (outRead) {
-        CloseHandle(outRead);
-    }
-    if (errRead) {
-        CloseHandle(errRead);
-    }
-    unregisterChild(pi.hProcess);
-    CloseHandle(pi.hProcess);
     return result;
 }
 

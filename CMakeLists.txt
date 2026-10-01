@@ -148,9 +148,13 @@ if(BUILD_TESTS)
             GTest::gtest
             GTest::gtest_main
     )
+    # Compiled child fixture so process tests do not depend on shell scripts.
+    add_executable(ytconv-output-writer tests/fixtures/output_writer.cpp)
+    add_dependencies(yt-converter-tests ytconv-output-writer)
     target_compile_definitions(yt-converter-tests
         PRIVATE
             YTCONV_FAKE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fakes"
+            YTCONV_OUTPUT_WRITER="$<TARGET_FILE:ytconv-output-writer>"
     )
 
     file(GLOB YTCONV_FAKES ${CMAKE_CURRENT_SOURCE_DIR}/tests/fakes/*)

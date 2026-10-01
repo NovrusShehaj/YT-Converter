@@ -36,6 +36,8 @@ yt2mp3-api          src/api/server.cpp + src/api/api_app.cpp
 
 `src/utils/process.cpp` uses `posix_spawnp` (Linux/macOS) with a new process group, stdin from `/dev/null`, bounded stdout/stderr capture, and a deadline. Timeout or API/CLI shutdown sends SIGTERM/SIGKILL to the group. Windows uses `CreateProcessW` without `cmd.exe`.
 
+Every retained output buffer is bounded. Captured text keeps the last `max_output_bytes` (8 KiB) per stream. Progress callbacks get lines of at most `max_line_bytes` (8 KiB, separate from capture): an oversized line keeps its first 8 KiB, the remainder is discarded up to the newline while the pipe keeps draining, and one truncated callback is delivered; a final unterminated line follows the same rule. Read ends are nonblocking, so a grandchild holding a pipe open cannot hang the final drain. If a callback throws, an RAII guard kills and reaps the child's process group before the exception propagates. The POSIX path is covered by `ProcessLines.*` tests using the compiled `ytconv-output-writer` fixture; the Windows path implements the same policy but is not built or tested in CI.
+
 yt-dlp flags include `--no-playlist`, `--newline`, `--socket-timeout`, `--max-filesize`, `--retries`, `--concurrent-fragments`, `--fragment-retries`, `--retry-sleep`, `--cache-dir`, `--no-mtime`, and `--merge-output-format mp4` for MP4. Audio formats use an audio-only selector (`ba[ext=m4a]/ba[ext=webm]/ba[ext=opus]/ba[acodec!=none]`) with no combined-format fallback. MP4 uses a height-capped mp4+m4a selector.
 
 ffmpeg flags include `-y -nostdin -hide_banner -loglevel error`.

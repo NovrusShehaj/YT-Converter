@@ -3,11 +3,56 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <stdexcept>
+#include <string>
+#include <thread>
 #include <utility>
+#include <vector>
+
+#ifndef _WIN32
+#include <signal.h>
+#endif
+
+#ifndef YTCONV_OUTPUT_WRITER
+#define YTCONV_OUTPUT_WRITER ""
+#endif
+
+namespace {
+
+struct Lines {
+    std::vector<std::string> lines;
+    std::size_t maxPayload = 0;
+};
+
+void collect(const std::string& line, void* user) {
+    auto* lines = static_cast<Lines*>(user);
+    lines->maxPayload = std::max(lines->maxPayload, line.size());
+    lines->lines.push_back(line);
+}
+
+yt::process::RunOptions callbackOptions(Lines& lines) {
+    yt::process::RunOptions options;
+    options.timeout_ms = 30000;
+    options.max_output_bytes = 8192;
+    options.max_line_bytes = 8192;
+    options.on_line = collect;
+    options.on_line_user = &lines;
+    return options;
+}
+
+std::vector<std::string> writer(std::vector<std::string> actions) {
+    actions.insert(actions.begin(), YTCONV_OUTPUT_WRITER);
+    return actions;
+}
+
+} // namespace
 
 TEST(Process, EchoPreservesMetacharactersAsSeparateArguments) {
     const auto dir = makeTestDir();
@@ -73,56 +118,117 @@ TEST(Process, LargeStdoutCompletesWithoutTimeout) {
     EXPECT_GE(result.stdout_text.size(), 1024 * 1024u);
 }
 
-struct CallbackData {
-    std::string* line = nullptr;
-    bool* received = nullptr;
-};
-
-TEST(Process, ProgressLinesAreDelivered) {
-    // Use a small Python script that prints a progress line then exits
-    const auto dir = makeTestDir();
-    const auto script = (dir / "progress.py");
-    {
-        std::ofstream in(script);
-        in << "#!/usr/bin/env python3\n";
-        in << "import sys\n";
-        in << "print('[download] 50%% of ~100MB')\n";
-        in << "sys.exit(0)\n";
-    }
-    std::filesystem::permissions(script, std::filesystem::perms::owner_all,
-                                 std::filesystem::perm_options::replace);
-
-    std::string capturedLine;
-    bool lineReceived = false;
-
-    yt::process::RunOptions opts;
-    opts.timeout_ms = 5000;
-    opts.capture_stdout = true;
-    opts.capture_stderr = false;
-    opts.max_output_bytes = 8192;
-    opts.on_line = [](const std::string& line, void* user) {
-        auto* d = static_cast<CallbackData*>(user);
-        if (d->line)
-            d->line->assign(line);
-        if (d->received)
-            *d->received = true;
-    };
-    auto* userData = new CallbackData;
-    userData->line = &capturedLine;
-    userData->received = &lineReceived;
-    opts.on_line_user = reinterpret_cast<void*>(userData);
-
-    const auto result = yt::process::run({script.string()}, opts);
-
-    auto* d = static_cast<CallbackData*>(userData);
-    delete d;
-    EXPECT_EQ(result.exit_code, 0);
-    EXPECT_FALSE(result.timed_out);
-    // The callback should have been called
-    EXPECT_TRUE(lineReceived && !capturedLine.empty());
-}
-
 TEST(Process, TrueUtilityExitsZero) {
     const auto result = yt::process::run({"/bin/true"});
     EXPECT_EQ(result.exit_code, 0);
+}
+
+TEST(ProcessLines, MultiMegabyteNewlineFreeOutputIsBounded) {
+    Lines lines;
+    auto options = callbackOptions(lines);
+    const auto result = yt::process::run(writer({"out:4194304:A", "err:4194304:B"}), options);
+    EXPECT_EQ(result.exit_code, 0);
+    EXPECT_FALSE(result.timed_out);
+    // One truncated callback per stream, each exactly the line bound.
+    ASSERT_EQ(lines.lines.size(), 2u);
+    EXPECT_EQ(lines.maxPayload, 8192u);
+    EXPECT_LE(result.peak_line_bytes, 8192u);
+    EXPECT_LE(result.stdout_text.size(), 8192u);
+    EXPECT_LE(result.stderr_text.size(), 8192u);
+    for (const auto& line : lines.lines) {
+        EXPECT_TRUE(line == std::string(8192, 'A') || line == std::string(8192, 'B'));
+    }
+}
+
+TEST(ProcessLines, GiantLineIsTruncatedOnceThenProgressParses) {
+    Lines lines;
+    auto options = callbackOptions(lines);
+    const auto result = yt::process::run(
+        writer({"out:1000000:x", "outline:", "outline:[download]  42.0% of 10.00MiB"}), options);
+    EXPECT_EQ(result.exit_code, 0);
+    ASSERT_EQ(lines.lines.size(), 2u);
+    EXPECT_EQ(lines.lines[0], std::string(8192, 'x'));
+    EXPECT_EQ(lines.lines[1], "[download]  42.0% of 10.00MiB");
+    EXPECT_LE(result.peak_line_bytes, 8192u);
+}
+
+TEST(ProcessLines, FinalUnterminatedLineFollowsTheSameBound) {
+    Lines lines;
+    auto options = callbackOptions(lines);
+    const auto result = yt::process::run(writer({"outline:first", "out:20000:y"}), options);
+    EXPECT_EQ(result.exit_code, 0);
+    ASSERT_EQ(lines.lines.size(), 2u);
+    EXPECT_EQ(lines.lines[0], "first");
+    EXPECT_EQ(lines.lines[1], std::string(8192, 'y'));
+}
+
+TEST(ProcessLines, BothStreamsDeliverLinesAndCrIsDropped) {
+    Lines lines;
+    auto options = callbackOptions(lines);
+    const auto result = yt::process::run(writer({"outline:alpha\r", "errline:beta"}), options);
+    EXPECT_EQ(result.exit_code, 0);
+    ASSERT_EQ(lines.lines.size(), 2u);
+    EXPECT_NE(std::find(lines.lines.begin(), lines.lines.end(), "alpha"), lines.lines.end());
+    EXPECT_NE(std::find(lines.lines.begin(), lines.lines.end(), "beta"), lines.lines.end());
+}
+
+#ifndef _WIN32
+TEST(ProcessLines, ThrowingCallbackReapsChild) {
+    const auto dir = makeTestDir();
+    const auto pidFile = dir / "child.pid";
+    yt::process::RunOptions options;
+    options.timeout_ms = 30000;
+    options.on_line = [](const std::string&, void*) {
+        throw std::runtime_error("callback failed");
+    };
+    const auto started = std::chrono::steady_clock::now();
+    EXPECT_THROW(
+        yt::process::run(writer({"pidfile:" + pidFile.string(), "outline:boom", "sleep:30000"}),
+                         options),
+        std::runtime_error);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(10));
+    const pid_t pid = static_cast<pid_t>(std::stol(readFile(pidFile)));
+    // ESRCH proves the child was killed and reaped (a zombie would still accept signal 0).
+    EXPECT_EQ(::kill(pid, 0), -1);
+    EXPECT_EQ(errno, ESRCH);
+}
+#endif
+
+TEST(ProcessLines, TimeoutWithEndlessOutputCompletesPromptly) {
+    Lines lines;
+    auto options = callbackOptions(lines);
+    options.timeout_ms = 500;
+    const auto started = std::chrono::steady_clock::now();
+    const auto result = yt::process::run(writer({"spam:z"}), options);
+    EXPECT_TRUE(result.timed_out);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(10));
+    EXPECT_LE(lines.maxPayload, 8192u);
+    EXPECT_LE(result.peak_line_bytes, 8192u);
+    EXPECT_LE(result.stdout_text.size(), 8192u);
+}
+
+TEST(ProcessLines, CancellationWithEndlessOutputCompletesPromptly) {
+    Lines lines;
+    auto options = callbackOptions(lines);
+    options.cancel = std::make_shared<std::atomic<bool>>(false);
+    std::thread canceller([cancel = options.cancel] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        cancel->store(true);
+    });
+    const auto started = std::chrono::steady_clock::now();
+    const auto result = yt::process::run(writer({"spam:q"}), options);
+    canceller.join();
+    EXPECT_TRUE(result.canceled);
+    EXPECT_FALSE(result.timed_out);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(10));
+    EXPECT_LE(lines.maxPayload, 8192u);
+}
+
+TEST(ProcessLines, ProgressLinesAreDelivered) {
+    Lines lines;
+    auto options = callbackOptions(lines);
+    const auto result = yt::process::run(writer({"outline:[download]  50.0% of ~100MB"}), options);
+    EXPECT_EQ(result.exit_code, 0);
+    ASSERT_EQ(lines.lines.size(), 1u);
+    EXPECT_EQ(lines.lines[0], "[download]  50.0% of ~100MB");
 }
