@@ -172,6 +172,9 @@ class ApiServer::Impl {
         return "http://" + config.bind + ":" + std::to_string(config.port);
     }
 
+    // Single route policy for every service-key protected route (conversions and jobs). With no
+    // key configured, validateApiConfig only permits the explicit unauthenticated-localhost mode.
+    // Health, readiness, and loopback-only metrics stay public by design.
     bool authorize(const http_request& request) const {
         if (config.api_key.empty()) {
             return true;
@@ -181,6 +184,16 @@ class ApiServer::Impl {
             return false;
         }
         return constantTimeEquals(toUtf8(headers.find(U("X-Api-Key"))->second), config.api_key);
+    }
+
+    // Replies 401 and returns false when the request lacks the configured key. Called before any
+    // lookup so an unauthorized caller learns nothing about whether a job exists.
+    bool requireServiceKey(const http_request& request) const {
+        if (authorize(request)) {
+            return true;
+        }
+        replyJson(request, 401, errorBody(ErrorCode::Unauthorized, "Missing or invalid API key"));
+        return false;
     }
 
     bool outputWritable() const {
@@ -228,13 +241,16 @@ class ApiServer::Impl {
                 logger.clearContext();
                 return;
             }
-            if (path.rfind("/v1/jobs/", 0) == 0 && method == methods::GET) {
-                handleJobStatus(request, path.substr(std::string("/v1/jobs/").size()));
-                logger.clearContext();
-                return;
-            }
-            if (path.rfind("/v1/jobs/", 0) == 0 && method == methods::DEL) {
-                handleJobCancel(request, path.substr(std::string("/v1/jobs/").size()));
+            if (path.rfind("/v1/jobs/", 0) == 0 &&
+                (method == methods::GET || method == methods::DEL)) {
+                if (requireServiceKey(request)) {
+                    const std::string jobId = path.substr(std::string("/v1/jobs/").size());
+                    if (method == methods::GET) {
+                        handleJobStatus(request, jobId);
+                    } else {
+                        handleJobCancel(request, jobId);
+                    }
+                }
                 logger.clearContext();
                 return;
             }
@@ -280,13 +296,9 @@ class ApiServer::Impl {
                     logger.clearContext();
                     return;
                 }
-                if (!authorize(request)) {
-                    replyJson(request, 401,
-                              errorBody(ErrorCode::Unauthorized, "Missing or invalid API key"));
-                    logger.clearContext();
-                    return;
+                if (requireServiceKey(request)) {
+                    handleConvert(request, requestId);
                 }
-                handleConvert(request, requestId);
                 logger.clearContext();
                 return;
             }

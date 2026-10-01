@@ -97,14 +97,66 @@ class ApiTest : public ::testing::Test {
     }
 
     http_response request(const method& verb, const std::string& path,
-                          const json::value& body = json::value::null()) {
+                          const json::value& body = json::value::null(),
+                          const std::string& apiKey = {}) {
         http_client client(utility::conversions::to_string_t(base_));
         http_request req(verb);
         req.set_request_uri(utility::conversions::to_string_t(path));
+        if (!apiKey.empty()) {
+            req.headers().add(U("X-Api-Key"), utility::conversions::to_string_t(apiKey));
+        }
         if (!body.is_null()) {
             req.set_body(body);
         }
         return client.request(req).get();
+    }
+
+    // Replaces the running server with one using `config`, trying a range of local ports.
+    void restartServer(yt::Config config) {
+        if (server_) {
+            server_->stop();
+            server_.reset();
+        }
+        yt::applyLogConfig(config);
+        std::exception_ptr last;
+        for (int port = 18800; port < 18900; ++port) {
+            config.port = port;
+            try {
+                server_ = std::make_unique<yt::api::ApiServer>(config);
+                server_->start();
+                base_ = "http://127.0.0.1:" + std::to_string(port);
+                return;
+            } catch (...) {
+                last = std::current_exception();
+                server_.reset();
+            }
+        }
+        if (last) {
+            std::rethrow_exception(last);
+        }
+    }
+
+    yt::Config baseConfig() const {
+        yt::Config config;
+        config.bind = "127.0.0.1";
+        config.allow_unauthenticated_localhost = true;
+        config.output_dir = output_.string();
+        config.yt_dlp_path = fakePath("yt-dlp");
+        config.ffmpeg_path = fakePath("ffmpeg");
+        config.download_timeout_sec = 20;
+        config.convert_timeout_sec = 20;
+        config.max_concurrent = 1;
+        config.queue_depth = 8;
+        config.log_level = "ERROR";
+        return config;
+    }
+
+    static std::string field(const json::value& body, const char* name) {
+        const auto key = utility::conversions::to_string_t(name);
+        if (!body.is_object() || !body.has_field(key) || !body.at(key).is_string()) {
+            return {};
+        }
+        return utility::conversions::to_utf8string(body.at(key).as_string());
     }
 
     json::value waitJob(const std::string& jobId) {
@@ -330,4 +382,86 @@ TEST(ReadyCache, FailureIsNotCached) {
     EXPECT_FALSE(yt::deps::checkToolsCached(config).ok);
     EXPECT_FALSE(yt::deps::checkToolsCached(config).ok);
     EXPECT_EQ(yt::metrics::global().ready_spawns.load(), before + 2);
+}
+
+TEST_F(ApiTest, JobRoutesEnforceConfiguredApiKey) {
+    const std::string key = "job-route-key-1234";
+    setenv("YTCONV_FAKE_SLEEP", "30", 1);
+    auto config = baseConfig();
+    config.api_key = key;
+    config.allow_unauthenticated_localhost = false;
+    yt::validateApiConfig(config);
+    restartServer(config);
+
+    auto missingPost = request(methods::POST, "/v1/conversions",
+                               postBody("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "mp3"));
+    EXPECT_EQ(missingPost.status_code(), status_codes::Unauthorized);
+
+    auto created = request(methods::POST, "/v1/conversions",
+                           postBody("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "mp3"), key);
+    ASSERT_EQ(created.status_code(), status_codes::Accepted);
+    const std::string jobId = field(created.extract_json().get(), "job_id");
+    ASSERT_FALSE(jobId.empty());
+
+    // Wait until the (sleeping) download child is running.
+    std::string status;
+    for (int attempt = 0; attempt < 100 && status != "running"; ++attempt) {
+        status = field(request(methods::GET, "/v1/jobs/" + jobId, json::value::null(), key)
+                           .extract_json()
+                           .get(),
+                       "status");
+        if (status != "running") {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    }
+    ASSERT_EQ(status, "running");
+
+    for (const std::string& badKey : {std::string(), std::string("wrong-key-value")}) {
+        for (const auto& verb : {methods::GET, methods::DEL}) {
+            auto denied = request(verb, "/v1/jobs/" + jobId, json::value::null(), badKey);
+            EXPECT_EQ(denied.status_code(), status_codes::Unauthorized) << verb;
+            const auto body = denied.extract_json().get();
+            EXPECT_EQ(field(body, "error_code"), "unauthorized");
+            EXPECT_FALSE(body.has_field(U("output_path")));
+            EXPECT_FALSE(body.has_field(U("job_id")));
+            EXPECT_FALSE(body.has_field(U("video_id")));
+        }
+        // An unknown ID is indistinguishable from an existing one without the key.
+        EXPECT_EQ(request(methods::GET, "/v1/jobs/no-such-job", json::value::null(), badKey)
+                      .status_code(),
+                  status_codes::Unauthorized);
+        EXPECT_EQ(request(methods::DEL, "/v1/jobs/no-such-job", json::value::null(), badKey)
+                      .status_code(),
+                  status_codes::Unauthorized);
+    }
+
+    // Unauthorized DELETEs left the job and its child untouched.
+    auto still = request(methods::GET, "/v1/jobs/" + jobId, json::value::null(), key);
+    ASSERT_EQ(still.status_code(), status_codes::OK);
+    EXPECT_EQ(field(still.extract_json().get(), "status"), "running");
+    EXPECT_EQ(countLines(output_ / "yt-dlp.count"), 1);
+
+    EXPECT_EQ(request(methods::GET, "/v1/jobs/no-such-job", json::value::null(), key).status_code(),
+              status_codes::NotFound);
+    EXPECT_EQ(request(methods::DEL, "/v1/jobs/no-such-job", json::value::null(), key).status_code(),
+              status_codes::NotFound);
+    EXPECT_EQ(request(methods::DEL, "/v1/jobs/" + jobId, json::value::null(), key).status_code(),
+              status_codes::OK);
+    EXPECT_EQ(request(methods::DEL, "/v1/jobs/" + jobId, json::value::null(), key).status_code(),
+              status_codes::Conflict);
+
+    // Probes stay public.
+    EXPECT_EQ(request(methods::GET, "/v1/healthz").status_code(), status_codes::OK);
+    EXPECT_NE(request(methods::GET, "/v1/readyz").status_code(), status_codes::Unauthorized);
+}
+
+TEST_F(ApiTest, UnauthenticatedLocalhostModeKeepsJobRoutesOpen) {
+    EXPECT_EQ(request(methods::GET, "/v1/jobs/no-such-job").status_code(), status_codes::NotFound);
+    auto created = request(methods::POST, "/v1/conversions",
+                           postBody("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "wav"));
+    ASSERT_EQ(created.status_code(), status_codes::Accepted);
+    const std::string jobId = field(created.extract_json().get(), "job_id");
+    const auto job = waitJob(jobId);
+    EXPECT_EQ(field(job, "status"), "succeeded");
+    EXPECT_EQ(request(methods::DEL, "/v1/jobs/" + jobId).status_code(), status_codes::Conflict);
 }

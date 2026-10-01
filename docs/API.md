@@ -16,6 +16,19 @@ Default listen URL: `http://127.0.0.1:8080`.
 
 Remote bind (`0.0.0.0` or `::`) is refused unless `YTCONV_ALLOW_REMOTE=1` and `YTCONV_API_KEY` is set.
 
+## Authorization
+
+When `YTCONV_API_KEY` is set, every service route requires `X-Api-Key: <key>`:
+`POST /v1/conversions`, `GET /v1/jobs/{id}`, and `DELETE /v1/jobs/{id}`. The key is checked before
+any job lookup, so a missing or wrong key returns `401 unauthorized` whether or not the job exists,
+and the response never includes job fields. With the correct key the routes behave normally
+(200/404/409).
+
+The single service key authorizes all service jobs. There are no user accounts and no per-user job
+ownership; random job IDs are identifiers, not credentials. `/v1/healthz` and `/v1/readyz` stay
+public, and `/v1/metrics` is loopback-only. Without a key, the API only starts in the explicit
+`--allow-unauthenticated-localhost` mode, where all routes are open to local clients.
+
 ## Convert
 
 `POST /v1/conversions`
@@ -24,7 +37,7 @@ Remote bind (`0.0.0.0` or `::`) is refused unless `YTCONV_ALLOW_REMOTE=1` and `Y
 {"url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","format":"mp3"}
 ```
 
-Optional header: `X-Api-Key` when an API key is configured.
+Required header when an API key is configured: `X-Api-Key`.
 
 ### Immediate reuse (output exists)
 
