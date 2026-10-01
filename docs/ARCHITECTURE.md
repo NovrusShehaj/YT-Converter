@@ -29,7 +29,7 @@ yt2mp3-api          src/api/server.cpp + src/api/api_app.cpp
 2. `yt::validation::parseYouTubeUrl` full-string parse. Allowed hosts: `youtube.com`, `www.`, `m.`, `music.`, `youtu.be`. Allowed paths: `/watch?v=`, `/shorts/`, `/embed/`, `/live/`, `youtu.be/<id>`. ID must be `^[A-Za-z0-9_-]{11}$`. Playlist-only and channel URLs fail with typed errors.
 3. Download URL is always `https://www.youtube.com/watch?v=<id>`. Original user input is not passed to yt-dlp.
 4. `yt::process::run(argv)` starts the child with a real argv array. No `system()`, `popen()`, or shell concatenation.
-5. Audio downloads land in `<output_root>/cache/src/<id>/audio/` and are shared by MP3 and WAV. MP4 is published with a hard link or copy when yt-dlp already wrote an `.mp4`; other containers are remuxed with ffmpeg. Finished files are `<output_root>/<id>.<fmt>`. A crash leaves `*.partial`, not a truncated final name.
+5. Audio downloads land in `<output_root>/cache/src/<id>/audio/` and are shared by MP3 and WAV. MP4 is published with a hard link or copy when yt-dlp already wrote an `.mp4`; other containers are remuxed with ffmpeg. Finished files are `<output_root>/<id>.<fmt>`. Each writer encodes into its own hidden temporary file, `<output_root>/.<id>.<fmt>.<random>.partial`, with an explicit ffmpeg muxer (`-f mp3`, `-f wav`, or `-f mp4`) because the `.partial` name does not identify a container. Success renames it over the final name; failure or cancellation removes it and leaves any previous final file untouched. A crash can leave a `.partial`, never a truncated final name.
 6. CLI prints the absolute path. `POST /v1/conversions` returns `202` and a job URL. `GET /v1/jobs/{id}` reports stage, percent, and timings.
 
 ## Process execution

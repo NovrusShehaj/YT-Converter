@@ -66,6 +66,14 @@ TEST_F(ConverterTest, SuccessWritesFinalFileAndRemovesTemp) {
     EXPECT_NE(ffmpegArgv.find("-y"), std::string::npos);
     EXPECT_NE(ffmpegArgv.find("-nostdin"), std::string::npos);
     EXPECT_NE(ffmpegArgv.find("libmp3lame"), std::string::npos);
+    // The temporary output has no media extension, so the muxer must be explicit and must
+    // directly precede the output path.
+    const auto args = readLines(output_ / "ffmpeg.argv");
+    ASSERT_GE(args.size(), 3u);
+    EXPECT_EQ(args[args.size() - 3], "-f");
+    EXPECT_EQ(args[args.size() - 2], "mp3");
+    EXPECT_EQ(std::filesystem::path(args.back()).extension(), ".partial");
+    EXPECT_EQ(countPartialFiles(output_), 0);
 
     EXPECT_GT(result.download_ms, 0u);
     EXPECT_EQ(result.bytes_downloaded, 4u);
@@ -118,7 +126,34 @@ TEST_F(ConverterTest, FailedFfmpegCleansTempAndOutput) {
         },
         yt::Error);
     EXPECT_FALSE(std::filesystem::exists(output_ / "dQw4w9WgXcQ.mp3"));
-    EXPECT_FALSE(std::filesystem::exists(output_.string() + "/dQw4w9WgXcQ.mp3.partial"));
+    EXPECT_EQ(countPartialFiles(output_), 0);
+}
+
+TEST_F(ConverterTest, FailedReplacementKeepsPreviousOutput) {
+    writeFile(output_ / "dQw4w9WgXcQ.mp3", "OLD-VALID-OUTPUT");
+    yt::converter::ConversionRequest request;
+    request.url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+    request.format = "mp3";
+    request.config = testConfig(output_, fakePath("yt-dlp"), fakePath("fail"));
+    request.config.force = true;
+    EXPECT_THROW(yt::converter::processVideo(request), yt::Error);
+    EXPECT_EQ(readFile(output_ / "dQw4w9WgXcQ.mp3"), "OLD-VALID-OUTPUT");
+    EXPECT_EQ(countPartialFiles(output_), 0);
+}
+
+TEST_F(ConverterTest, EachFormatSelectsItsMuxer) {
+    for (const std::string format : {"mp3", "wav", "mp4"}) {
+        setenv("YTCONV_FAKE_EXT", "webm", 1);
+        yt::converter::ConversionRequest request;
+        request.url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+        request.format = format;
+        request.config = testConfig(output_, fakePath("yt-dlp"), fakePath("ffmpeg"));
+        yt::converter::processVideo(request);
+        const auto args = readLines(output_ / "ffmpeg.argv");
+        ASSERT_GE(args.size(), 3u) << format;
+        EXPECT_EQ(args[args.size() - 3], "-f") << format;
+        EXPECT_EQ(args[args.size() - 2], format) << format;
+    }
 }
 
 TEST_F(ConverterTest, TimeoutIsClassified) {

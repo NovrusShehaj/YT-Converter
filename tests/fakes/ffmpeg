@@ -13,6 +13,17 @@ printf '%s\n' "$@" > "$LOGDIR/ffmpeg.argv"
 echo 1 >> "$LOGDIR/ffmpeg.count"
 
 out="${@: -1}"
+# Like real ffmpeg, refuse an output whose extension does not identify a muxer unless "-f FMT"
+# immediately precedes it. This keeps the fake from hiding a missing muxer.
+if [[ $# -lt 3 || "${@: -3:1}" != "-f" ]]; then
+  case "$out" in
+    *.mp3|*.wav|*.mp4|*.m4a|*.mkv|*.webm) ;;
+    *)
+      echo "Unable to choose an output format for '$out'; use a standard extension or specify a format manually." >&2
+      exit 1
+      ;;
+  esac
+fi
 mkdir -p -- "$(dirname -- "$out")"
 printf 'FAKEOUT' > "$out"
 exit 0

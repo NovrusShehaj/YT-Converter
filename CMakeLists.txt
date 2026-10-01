@@ -160,6 +160,21 @@ if(BUILD_TESTS)
 
     add_test(NAME yt-converter-tests COMMAND yt-converter-tests)
 
+    # Real ffmpeg/ffprobe on locally generated media; skipped only when the tools are absent and
+    # YTCONV_REQUIRE_MEDIA_TESTS is not 1.
+    add_executable(yt-converter-media-tests tests/test_media.cpp)
+    target_link_libraries(yt-converter-media-tests
+        PRIVATE
+            yt-converter-core
+            GTest::gtest
+            GTest::gtest_main
+    )
+    target_compile_definitions(yt-converter-media-tests
+        PRIVATE
+            YTCONV_FAKE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fakes"
+    )
+    add_test(NAME yt-converter-media-tests COMMAND yt-converter-media-tests)
+
     if(BUILD_API)
         # HTTP tests live in their own binary so CI can prove they were built and run.
         add_executable(yt-converter-api-tests tests/test_api.cpp)

@@ -28,10 +28,18 @@ fi
 if [[ -n "$out" ]]; then
   mkdir -p -- "$(dirname -- "$out")"
   ext="${YTCONV_FAKE_EXT:-mp4}"
+  if [[ -n "${YTCONV_FAKE_SOURCE:-}" ]]; then
+    # Serve a locally generated media fixture instead of placeholder bytes.
+    ext="${YTCONV_FAKE_SOURCE##*.}"
+  fi
   final_out="$out"
   if [[ "$out" == *"%(ext)s"* ]]; then
     final_out="${out//\%(ext)s/$ext}"
   fi
-  printf 'FAKE' > "$final_out"
+  if [[ -n "${YTCONV_FAKE_SOURCE:-}" ]]; then
+    cp -- "$YTCONV_FAKE_SOURCE" "$final_out"
+  else
+    printf '%s' "${YTCONV_FAKE_CONTENT:-FAKE}" > "$final_out"
+  fi
 fi
 exit 0

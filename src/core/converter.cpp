@@ -292,10 +292,26 @@ void evictSourceCache(const fs::path& root, std::int64_t maxBytes, const fs::pat
     }
 }
 
-void publishFile(const fs::path& source, const fs::path& finalPath) {
-    const fs::path partial(finalPath.string() + ".partial");
+// A unique temporary name in the output directory, so concurrent writers never share a partial
+// file and the final rename stays on one filesystem.
+fs::path uniquePartialPath(const fs::path& finalPath) {
+    return finalPath.parent_path() / ("." + finalPath.filename().string() + "." + randomSuffix() +
+                                      randomSuffix() + ".partial");
+}
+
+// ffmpeg cannot infer a muxer from a ".partial" name, so the container is always explicit.
+const char* outputMuxer(const std::string& format) {
+    if (format == "mp3") {
+        return "mp3";
+    }
+    if (format == "wav") {
+        return "wav";
+    }
+    return "mp4";
+}
+
+void publishFile(const fs::path& source, const fs::path& partial, const fs::path& finalPath) {
     std::error_code ec;
-    fs::remove(partial, ec);
     fs::create_hard_link(source, partial, ec);
     if (ec) {
         fs::copy_file(source, partial, fs::copy_options::overwrite_existing);
@@ -415,7 +431,7 @@ void convertMedia(const ConversionRequest& request, const fs::path& source,
     } else {
         argv.insert(argv.end(), {"-c", "copy"});
     }
-    argv.push_back(partial.string());
+    argv.insert(argv.end(), {"-f", outputMuxer(request.format), partial.string()});
 
     auto& logger = yt::logger::Logger::getInstance();
     logger.info("Converting to " + request.format);
@@ -497,7 +513,7 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
     if (!pathIsInside(outputRoot, finalPath)) {
         throw Error(ErrorCode::InvalidInput, "Output path escapes the output root");
     }
-    const fs::path partial(finalPath.string() + ".partial");
+    const fs::path partial = uniquePartialPath(finalPath);
 
     if (request.config.reuse_completed && !request.config.force && !request.refresh &&
         fs::exists(finalPath) && fs::file_size(finalPath) > 0) {
@@ -611,7 +627,7 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
             !audioOnly && source.extension() == ".mp4" && fs::file_size(source) > 0;
         if (alreadyMp4) {
             logger.info("Skipping ffmpeg remux for MP4");
-            publishFile(source, finalPath);
+            publishFile(source, partial, finalPath);
         } else {
             const auto convertStart = std::chrono::steady_clock::now();
             convertMedia(request, source, partial);

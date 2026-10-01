@@ -33,6 +33,7 @@ Sanitizer builds use `-DYTCONV_SANITIZE=address,undefined` or `-DYTCONV_SANITIZE
 | `test_validation` | URL/ID table: watch, youtu.be, shorts, injection, foreign host, playlist, channel |
 | `test_process` | argv spawn, missing binary, non-zero exit, timeout kill |
 | `test_converter` | fake download/convert, temp cleanup, reuse, error mapping, audio vs video argv |
+| `test_media` | Real ffmpeg/ffprobe on locally generated media: MP3, WAV, MKV→MP4 remux, MP4 bypass, failed replacement. Skips only when the tools are absent; `YTCONV_REQUIRE_MEDIA_TESTS=1` turns that skip into a failure (CI sets it) |
 | `test_security_argv` | reconstructed URL, `--no-playlist`, safe filenames |
 | `test_api` | POST contract, 404/405/401, health/ready/metrics (needs cpprestsdk) |
 | `test_error` / `test_config` / `test_logger` | mappings, env guards, concurrent log lines |

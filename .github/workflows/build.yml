@@ -61,6 +61,7 @@ jobs:
           test -x build/yt-converter-api-tests
           ctest --test-dir build -N | tee build/ctest-list.txt
           grep -q 'yt-converter-api-tests' build/ctest-list.txt
+          grep -q 'yt-converter-media-tests' build/ctest-list.txt
 
       - name: Forbid shell process APIs
         run: bash tests/check_no_system.sh
@@ -81,6 +82,7 @@ jobs:
             build/yt2mp3-api
             build/yt-converter-tests
             build/yt-converter-api-tests
+            build/yt-converter-media-tests
             build/ctest-list.txt
             build/Testing/Temporary/
           if-no-files-found: error
