@@ -18,7 +18,7 @@ struct LogContext {
 };
 
 class Logger {
-public:
+  public:
     static Logger& getInstance();
 
     Logger(const Logger&) = delete;
@@ -40,7 +40,7 @@ public:
     void setContext(const LogContext& context);
     void clearContext();
 
-private:
+  private:
     Logger();
     ~Logger();
 

@@ -7,9 +7,9 @@
 namespace yt {
 
 class JobLimiter {
-public:
+  public:
     class Slot {
-    public:
+      public:
         Slot() = default;
         explicit Slot(JobLimiter* limiter);
         Slot(Slot&& other) noexcept;
@@ -19,7 +19,7 @@ public:
         Slot(const Slot&) = delete;
         Slot& operator=(const Slot&) = delete;
 
-    private:
+      private:
         void release();
         JobLimiter* limiter_ = nullptr;
     };
@@ -27,7 +27,7 @@ public:
     explicit JobLimiter(int max_concurrent);
     std::optional<Slot> tryAcquire();
 
-private:
+  private:
     friend class Slot;
     int max_;
     int current_ = 0;

@@ -5,11 +5,17 @@ namespace yt {
 Error::Error(ErrorCode code, std::string message)
     : std::runtime_error(message), code_(code), message_(std::move(message)) {}
 
-const char* Error::codeString() const noexcept { return errorCodeString(code_); }
+const char* Error::codeString() const noexcept {
+    return errorCodeString(code_);
+}
 
-int Error::httpStatus() const noexcept { return errorHttpStatus(code_); }
+int Error::httpStatus() const noexcept {
+    return errorHttpStatus(code_);
+}
 
-int Error::exitCode() const noexcept { return errorExitCode(code_); }
+int Error::exitCode() const noexcept {
+    return errorExitCode(code_);
+}
 
 const char* errorCodeString(ErrorCode code) noexcept {
     switch (code) {

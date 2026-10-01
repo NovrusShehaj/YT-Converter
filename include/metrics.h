@@ -24,7 +24,7 @@ struct Counters {
 Counters& global();
 void recordStart();
 void recordSuccess(std::uint64_t bytes, std::uint64_t download_ms, std::uint64_t convert_ms,
-                  std::uint64_t bytes_downloaded);
+                   std::uint64_t bytes_downloaded);
 void recordFailure();
 std::string toJson();
 void logSnapshot();

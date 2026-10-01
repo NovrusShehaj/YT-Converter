@@ -106,10 +106,12 @@ bool looksLikeDiskFull(const std::string& text) {
     std::transform(lower.begin(), lower.end(), lower.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return lower.find("no space left") != std::string::npos ||
-           lower.find("enospc") != std::string::npos || lower.find("disk full") != std::string::npos;
+           lower.find("enospc") != std::string::npos ||
+           lower.find("disk full") != std::string::npos;
 }
 
-void throwSpawnError(ErrorCode fallback, const std::string& tool, const yt::process::RunResult& result) {
+void throwSpawnError(ErrorCode fallback, const std::string& tool,
+                     const yt::process::RunResult& result) {
     if (result.canceled) {
         throw Error(ErrorCode::Canceled, tool + " canceled");
     }
@@ -156,8 +158,8 @@ fs::path findSourceFile(const fs::path& directory) {
 
 std::string videoFormatSelector(int maxHeight) {
     std::ostringstream ss;
-    ss << "bestvideo[height<=" << maxHeight << "][ext=mp4]+bestaudio[ext=m4a]/best[height<="
-       << maxHeight << "][ext=mp4]/mp4";
+    ss << "bestvideo[height<=" << maxHeight
+       << "][ext=mp4]+bestaudio[ext=m4a]/best[height<=" << maxHeight << "][ext=mp4]/mp4";
     return ss.str();
 }
 
@@ -171,7 +173,8 @@ int parsePercent(const std::string& line) {
         return -1;
     }
     std::size_t begin = mark;
-    while (begin > 0 && (std::isdigit(static_cast<unsigned char>(line[begin - 1])) || line[begin - 1] == '.')) {
+    while (begin > 0 &&
+           (std::isdigit(static_cast<unsigned char>(line[begin - 1])) || line[begin - 1] == '.')) {
         --begin;
     }
     try {
@@ -208,7 +211,8 @@ std::uintmax_t availableBytes(const fs::path& root) {
 }
 
 void ensureSpace(const fs::path& root, std::int64_t maxFileBytes) {
-    const auto need = static_cast<std::uintmax_t>(std::max<std::int64_t>(0, maxFileBytes)) + kMinFreeBytes;
+    const auto need =
+        static_cast<std::uintmax_t>(std::max<std::int64_t>(0, maxFileBytes)) + kMinFreeBytes;
     if (availableBytes(root) < need) {
         throw Error(ErrorCode::DiskFull, "Not enough free disk space in the output directory");
     }
@@ -233,7 +237,7 @@ fs::path metadataCacheDir(const fs::path& outputRoot, const Config& config) {
     if (config.cache_dir.empty()) {
         return outputRoot / "cache" / "ytdlp";
     }
-    const fs::path configured(config.cache_dir);
+    fs::path configured(config.cache_dir);
     if (configured.is_absolute()) {
         return configured;
     }
@@ -338,9 +342,10 @@ SpawnedDownload downloadMedia(const ConversionRequest& request, const validation
     if (!audioOnly) {
         argv.insert(argv.end(), {"--merge-output-format", "mp4"});
     }
-    argv.insert(argv.end(), {"-f", audioOnly ? audioFormatSelector()
-                                             : videoFormatSelector(request.config.max_height),
-                             "-o", outputTemplate.string(), video.canonical_url});
+    argv.insert(argv.end(),
+                {"-f",
+                 audioOnly ? audioFormatSelector() : videoFormatSelector(request.config.max_height),
+                 "-o", outputTemplate.string(), video.canonical_url});
 
     auto& logger = yt::logger::Logger::getInstance();
     logger.info("Downloading video " + video.id);
@@ -380,22 +385,31 @@ SpawnedDownload downloadMedia(const ConversionRequest& request, const validation
     SpawnedDownload downloaded;
     downloaded.source = stable;
     downloaded.bytes = fs::file_size(stable);
-    downloaded.download_ms = static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started)
-            .count());
+    downloaded.download_ms =
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now() - started)
+                                       .count());
     if (downloaded.download_ms == 0) {
         downloaded.download_ms = 1;
     }
     return downloaded;
 }
 
-void convertMedia(const ConversionRequest& request, const fs::path& source, const fs::path& partial) {
+void convertMedia(const ConversionRequest& request, const fs::path& source,
+                  const fs::path& partial) {
     std::vector<std::string> argv{
-        request.config.ffmpeg_path, "-y", "-nostdin", "-hide_banner", "-loglevel", "error", "-i",
+        request.config.ffmpeg_path,
+        "-y",
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
         source.string(),
     };
     if (request.format == "mp3") {
-        argv.insert(argv.end(), {"-vn", "-ar", "44100", "-ac", "2", "-b:a", "192k", "-codec:a", "libmp3lame"});
+        argv.insert(argv.end(),
+                    {"-vn", "-ar", "44100", "-ac", "2", "-b:a", "192k", "-codec:a", "libmp3lame"});
     } else if (request.format == "wav") {
         argv.insert(argv.end(), {"-vn", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2"});
     } else {
@@ -430,7 +444,8 @@ void logCompletion(const ConversionResult& result, const std::string& format) {
     yt::logger::Logger::getInstance().info(ss.str());
 }
 
-ConversionResult resultFromFlight(const ConversionRequest& request, const validation::VideoRef& video,
+ConversionResult resultFromFlight(const ConversionRequest& request,
+                                  const validation::VideoRef& video,
                                   const singleflight::Flight& flight, bool reused) {
     ConversionResult result;
     result.output_path = flight.value;
@@ -499,7 +514,8 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
     }
 
     const bool audioOnly = request.format == "mp3" || request.format == "wav";
-    const std::string kind = audioOnly ? "audio" : ("v" + std::to_string(request.config.max_height));
+    const std::string kind =
+        audioOnly ? "audio" : ("v" + std::to_string(request.config.max_height));
     const std::string downloadKey = outputRoot.string() + "\n" + video.id + "\n" + kind;
     const std::string encodeKey = outputRoot.string() + "\n" + video.id + "\n" + request.format;
     const fs::path kindDir = outputRoot / "cache" / "src" / video.id / kind;
@@ -591,17 +607,18 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
             return ready;
         }
 
-        const bool alreadyMp4 = !audioOnly && source.extension() == ".mp4" && fs::file_size(source) > 0;
+        const bool alreadyMp4 =
+            !audioOnly && source.extension() == ".mp4" && fs::file_size(source) > 0;
         if (alreadyMp4) {
             logger.info("Skipping ffmpeg remux for MP4");
             publishFile(source, finalPath);
         } else {
             const auto convertStart = std::chrono::steady_clock::now();
             convertMedia(request, source, partial);
-            convertMs = static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
-                                                                     convertStart)
-                    .count());
+            convertMs =
+                static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               std::chrono::steady_clock::now() - convertStart)
+                                               .count());
             if (!fs::exists(partial) || fs::file_size(partial) == 0) {
                 throw Error(ErrorCode::ConversionFailed, "ffmpeg produced an empty output file");
             }
@@ -625,7 +642,8 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
         encodeMembership.flight->bytes = downloadedBytes;
         encodeFlights().succeed(encodeKey, encodeMembership.flight);
         encodePublished = true;
-        yt::metrics::recordSuccess(fs::file_size(finalPath), downloadMs, convertMs, downloadedBytes);
+        yt::metrics::recordSuccess(fs::file_size(finalPath), downloadMs, convertMs,
+                                   downloadedBytes);
         logCompletion(result, request.format);
         return result;
     } catch (const Error& error) {
@@ -641,8 +659,8 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
     } catch (const std::exception& error) {
         removeIfExists(partial);
         if (!encodePublished) {
-            encodeFlights().fail(encodeKey, encodeMembership.flight, static_cast<int>(ErrorCode::Internal),
-                                 error.what());
+            encodeFlights().fail(encodeKey, encodeMembership.flight,
+                                 static_cast<int>(ErrorCode::Internal), error.what());
         }
         if (metricsStarted) {
             yt::metrics::recordFailure();
@@ -651,8 +669,8 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
     } catch (...) {
         removeIfExists(partial);
         if (!encodePublished) {
-            encodeFlights().fail(encodeKey, encodeMembership.flight, static_cast<int>(ErrorCode::Internal),
-                                 "conversion failed");
+            encodeFlights().fail(encodeKey, encodeMembership.flight,
+                                 static_cast<int>(ErrorCode::Internal), "conversion failed");
         }
         if (metricsStarted) {
             yt::metrics::recordFailure();

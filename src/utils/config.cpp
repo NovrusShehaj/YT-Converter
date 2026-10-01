@@ -96,7 +96,8 @@ int64_t parseHumanSize(const std::string& value) {
     } catch (const Error&) {
         throw;
     } catch (const std::exception&) {
-        throw Error(ErrorCode::ConfigError, "YTCONV_MAX_FILESIZE must be a number such as 500M or 1G");
+        throw Error(ErrorCode::ConfigError,
+                    "YTCONV_MAX_FILESIZE must be a number such as 500M or 1G");
     }
 }
 
@@ -149,8 +150,7 @@ Config loadConfigFromEnv() {
     config.retries = envInt("YTCONV_RETRIES", config.retries, 0, 10);
     config.concurrent_fragments =
         envInt("YTCONV_CONCURRENT_FRAGMENTS", config.concurrent_fragments, 1, 16);
-    config.fragment_retries =
-        envInt("YTCONV_FRAGMENT_RETRIES", config.fragment_retries, 0, 100);
+    config.fragment_retries = envInt("YTCONV_FRAGMENT_RETRIES", config.fragment_retries, 0, 100);
     config.max_height = envInt("YTCONV_MAX_HEIGHT", config.max_height, 144, 4320);
     config.cache_dir = trimCopy(envOr("YTCONV_CACHE_DIR", config.cache_dir));
     const std::string cacheMax = trimCopy(envOr("YTCONV_SOURCE_CACHE_MAX_BYTES", ""));
@@ -161,8 +161,7 @@ Config loadConfigFromEnv() {
     config.ffmpeg_path = trimCopy(envOr("YTCONV_FFMPEG", config.ffmpeg_path));
     config.api_key = envOr("YTCONV_API_KEY", "");
     config.allow_remote = envFlag("YTCONV_ALLOW_REMOTE");
-    config.allow_unauthenticated_localhost =
-        envFlag("YTCONV_ALLOW_UNAUTHENTICATED_LOCALHOST");
+    config.allow_unauthenticated_localhost = envFlag("YTCONV_ALLOW_UNAUTHENTICATED_LOCALHOST");
     config.log_urls = envFlag("YTCONV_LOG_URLS");
     return config;
 }
@@ -184,8 +183,7 @@ void validateApiConfig(const Config& config) {
                             ". Set YTCONV_ALLOW_REMOTE=1 and YTCONV_API_KEY to enable remote bind");
         }
         if (config.api_key.empty()) {
-            throw Error(ErrorCode::ConfigError,
-                        "Remote bind requires YTCONV_API_KEY to be set");
+            throw Error(ErrorCode::ConfigError, "Remote bind requires YTCONV_API_KEY to be set");
         }
     } else if (!isLoopbackBind(config.bind)) {
         throw Error(ErrorCode::ConfigError,

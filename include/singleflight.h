@@ -29,7 +29,7 @@ struct Membership {
 };
 
 class Group {
-public:
+  public:
     Group() = default;
     Group(const Group&) = delete;
     Group& operator=(const Group&) = delete;
@@ -40,7 +40,7 @@ public:
               std::string error);
     void wait(const std::shared_ptr<Flight>& flight);
 
-private:
+  private:
     std::mutex mu_;
     std::map<std::string, std::shared_ptr<Flight>> inflight_;
 };

@@ -1,0 +1,19 @@
+# Required static-analysis gate. CI runs clang-tidy 18.1.8 against compile_commands.json from a
+# Debug build with BUILD_API=ON. Every enabled check is an error, so the gate cannot pass silently.
+Checks: >
+  -*,
+  clang-analyzer-*,
+  -clang-analyzer-optin.*,
+  -clang-analyzer-cplusplus.NewDeleteLeaks,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-exception-escape,
+  -bugprone-branch-clone,
+  performance-*,
+  -performance-avoid-endl,
+  -performance-enum-size
+WarningsAsErrors: '*'
+HeaderFilterRegex: '(include|src)/.*'
+FormatStyle: none

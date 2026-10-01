@@ -2,6 +2,13 @@
 set -euo pipefail
 LOGDIR="${YTCONV_FAKE_LOG_DIR:-.}"
 mkdir -p "$LOGDIR"
+
+if [[ "${1:-}" == "--version" ]]; then
+  echo 1 >> "$LOGDIR/yt-dlp.version.count"
+  echo "2024.12.23-fake"
+  exit 0
+fi
+
 printf '%s\n' "$@" > "$LOGDIR/yt-dlp.argv"
 echo 1 >> "$LOGDIR/yt-dlp.count"
 
@@ -19,7 +26,7 @@ if [[ -n "${YTCONV_FAKE_SLEEP:-}" ]]; then
 fi
 
 if [[ -n "$out" ]]; then
-  mkdir -p "$(dirname "$out")"
+  mkdir -p -- "$(dirname -- "$out")"
   ext="${YTCONV_FAKE_EXT:-mp4}"
   final_out="$out"
   if [[ "$out" == *"%(ext)s"* ]]; then

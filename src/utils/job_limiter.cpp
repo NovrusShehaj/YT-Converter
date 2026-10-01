@@ -19,7 +19,9 @@ JobLimiter::Slot& JobLimiter::Slot::operator=(Slot&& other) noexcept {
     return *this;
 }
 
-JobLimiter::Slot::~Slot() { release(); }
+JobLimiter::Slot::~Slot() {
+    release();
+}
 
 void JobLimiter::Slot::release() {
     if (limiter_ == nullptr) {

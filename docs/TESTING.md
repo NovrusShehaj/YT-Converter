@@ -5,12 +5,26 @@ Automated tests do not contact YouTube. They use GoogleTest and scripts under `t
 ## Run
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON -DBUILD_API=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-`./quick-test.sh` is a wrapper around the same commands.
+`BUILD_API=ON` (the default) requires cpprestsdk and builds the separate `yt-converter-api-tests`
+binary; configuration fails when cpprestsdk is missing. Use `-DBUILD_API=OFF` for a CLI-only build.
+`./quick-test.sh` is a wrapper around the same commands (`BUILD_API=OFF ./quick-test.sh` for CLI only).
+
+## Static checks
+
+The formatter and static-analysis gates are pinned so local runs match CI:
+
+```sh
+uvx --from clang-format==18.1.8 clang-format --dry-run -Werror $(git ls-files '*.cpp' '*.h')
+clang-tidy -p build --quiet $(git ls-files 'src/*.cpp')   # .clang-tidy makes findings errors
+cmake -S . -B build-werror -DYTCONV_WERROR=ON -DBUILD_TESTS=ON && cmake --build build-werror
+```
+
+Sanitizer builds use `-DYTCONV_SANITIZE=address,undefined` or `-DYTCONV_SANITIZE=thread`.
 
 ## What is covered
 

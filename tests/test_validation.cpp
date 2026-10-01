@@ -54,10 +54,12 @@ TEST(Validation, RejectsInjectionTraversalAndForeignHosts) {
         {"https://www.youtube.com/watch?v=abc/../x2345", false, "", ErrorCode::InvalidUrl},
         {"https://www.youtube.com/watch?v=abc/../../../tmp", false, "", ErrorCode::InvalidUrl},
         {"https://www.youtube.com/playlist?list=PLxxxxYYYYY", false, "", ErrorCode::PlaylistOnly},
-        {"https://www.youtube.com/channel/UCxxxxxxxxxxxxxxxxxxxxxx", false, "", ErrorCode::ChannelUrl},
+        {"https://www.youtube.com/channel/UCxxxxxxxxxxxxxxxxxxxxxx", false, "",
+         ErrorCode::ChannelUrl},
         {"https://www.youtube.com/@somechannel", false, "", ErrorCode::ChannelUrl},
         {"https://not-youtube.com/watch?v=dQw4w9WgXcQ", false, "", ErrorCode::UnsupportedHost},
-        {"https://www.youtube.com.evil.test/watch?v=dQw4w9WgXcQ", false, "", ErrorCode::UnsupportedHost},
+        {"https://www.youtube.com.evil.test/watch?v=dQw4w9WgXcQ", false, "",
+         ErrorCode::UnsupportedHost},
         {"https://user:pass@www.youtube.com/watch?v=dQw4w9WgXcQ", false, "", ErrorCode::InvalidUrl},
         {"ftp://www.youtube.com/watch?v=dQw4w9WgXcQ", false, "", ErrorCode::InvalidUrl},
     };
@@ -90,11 +92,11 @@ TEST(Validation, Formats) {
 }
 
 TEST(Validation, InputHelper) {
-    EXPECT_FALSE(yt::validation::validateConverterInput(
-                     "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "mp3")
-                     .has_value());
+    EXPECT_FALSE(
+        yt::validation::validateConverterInput("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "mp3")
+            .has_value());
     EXPECT_TRUE(yt::validation::validateConverterInput("https://example.com", "mp3").has_value());
-    EXPECT_TRUE(yt::validation::validateConverterInput(
-                    "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "avi")
-                    .has_value());
+    EXPECT_TRUE(
+        yt::validation::validateConverterInput("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "avi")
+            .has_value());
 }

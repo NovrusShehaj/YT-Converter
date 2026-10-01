@@ -26,7 +26,8 @@ void printServerInfo(const yt::Config& config, bool unauthenticated) {
     } else {
         std::cout << "Authentication: X-Api-Key required\n";
     }
-    std::cout << "Bind is loopback by default. Do not expose this service on the public internet.\n";
+    std::cout
+        << "Bind is loopback by default. Do not expose this service on the public internet.\n";
 }
 
 } // namespace

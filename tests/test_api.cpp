@@ -1,3 +1,6 @@
+// GoogleTest must precede cpprest: cpprest defines a U() macro that breaks gtest templates.
+#include <gtest/gtest.h>
+
 #include "api_app.h"
 #include "dependencies.h"
 #include "metrics.h"
@@ -6,7 +9,6 @@
 
 #include <cpprest/http_client.h>
 #include <cpprest/json.h>
-#include <gtest/gtest.h>
 
 #include <chrono>
 #include <cstdlib>
@@ -43,7 +45,7 @@ int countLines(const std::filesystem::path& path) {
 } // namespace
 
 class ApiTest : public ::testing::Test {
-protected:
+  protected:
     void SetUp() override {
         yt::process::resetShutdownForTests();
         yt::deps::clearReadyCacheForTests();
@@ -110,7 +112,8 @@ protected:
             auto response = request(methods::GET, "/v1/jobs/" + jobId);
             EXPECT_EQ(response.status_code(), status_codes::OK);
             auto body = response.extract_json().get();
-            const auto status = utility::conversions::to_utf8string(body.at(U("status")).as_string());
+            const auto status =
+                utility::conversions::to_utf8string(body.at(U("status")).as_string());
             if (status == "succeeded" || status == "failed" || status == "canceled") {
                 return body;
             }
@@ -150,7 +153,8 @@ TEST_F(ApiTest, HealthReadyAndContract) {
     const auto queued = ok.extract_json().get();
     EXPECT_EQ(queued.at(U("status")).as_string(), U("queued"));
     EXPECT_TRUE(queued.has_field(U("job_id")));
-    const auto job = waitJob(utility::conversions::to_utf8string(queued.at(U("job_id")).as_string()));
+    const auto job =
+        waitJob(utility::conversions::to_utf8string(queued.at(U("job_id")).as_string()));
     EXPECT_EQ(job.at(U("status")).as_string(), U("succeeded"));
     EXPECT_TRUE(job.has_field(U("output_path")));
     EXPECT_TRUE(job.has_field(U("download_ms")));
@@ -214,8 +218,8 @@ TEST_F(ApiTest, HealthAnswersWhileDownloadRuns) {
     const auto elapsed = std::chrono::steady_clock::now() - started;
     EXPECT_EQ(health.status_code(), status_codes::OK);
     EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(), 1000);
-    const auto jobId =
-        utility::conversions::to_utf8string(queued.extract_json().get().at(U("job_id")).as_string());
+    const auto jobId = utility::conversions::to_utf8string(
+        queued.extract_json().get().at(U("job_id")).as_string());
     EXPECT_EQ(request(methods::DEL, "/v1/jobs/" + jobId).status_code(), status_codes::OK);
 }
 
@@ -275,8 +279,8 @@ TEST_F(ApiTest, CancelOneJobLeavesTheOtherRunning) {
     ASSERT_EQ(second.status_code(), status_codes::Accepted);
     const auto firstId =
         utility::conversions::to_utf8string(first.extract_json().get().at(U("job_id")).as_string());
-    const auto secondId =
-        utility::conversions::to_utf8string(second.extract_json().get().at(U("job_id")).as_string());
+    const auto secondId = utility::conversions::to_utf8string(
+        second.extract_json().get().at(U("job_id")).as_string());
     EXPECT_EQ(request(methods::DEL, "/v1/jobs/" + firstId).status_code(), status_codes::OK);
     const auto canceled = waitJob(firstId);
     const auto finished = waitJob(secondId);
@@ -297,14 +301,15 @@ TEST_F(ApiTest, RejectsOversizedBodyAndUnsafeRequestId) {
     http_request badId(methods::POST);
     badId.set_request_uri(U("/v1/conversions"));
     badId.headers().add(U("Content-Type"), U("application/json"));
-    badId.headers().add(U("X-Request-Id"), U("bad\nid"));
+    // Header values cannot carry raw newlines on the wire; use other unsafe characters.
+    badId.headers().add(U("X-Request-Id"), U("bad id;<x>"));
     badId.set_body(postBody("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "wav"));
     auto accepted = client.request(badId).get();
     EXPECT_EQ(accepted.status_code(), status_codes::Accepted);
-    const auto requestId =
-        utility::conversions::to_utf8string(accepted.extract_json().get().at(U("request_id")).as_string());
-    EXPECT_EQ(requestId.find('\n'), std::string::npos);
-    EXPECT_NE(requestId, "bad\nid");
+    const auto requestId = utility::conversions::to_utf8string(
+        accepted.extract_json().get().at(U("request_id")).as_string());
+    EXPECT_EQ(requestId.find(' '), std::string::npos);
+    EXPECT_NE(requestId, "bad id;<x>");
 }
 
 TEST_F(ApiTest, ReadyCheckIsCached) {
@@ -312,7 +317,7 @@ TEST_F(ApiTest, ReadyCheckIsCached) {
     auto second = request(methods::GET, "/v1/readyz");
     EXPECT_EQ(first.status_code(), status_codes::OK);
     EXPECT_EQ(second.status_code(), status_codes::OK);
-    EXPECT_EQ(countLines(output_ / "yt-dlp.count"), 1);
+    EXPECT_EQ(countLines(output_ / "yt-dlp.version.count"), 1);
 }
 
 TEST(ReadyCache, FailureIsNotCached) {

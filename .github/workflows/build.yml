@@ -19,66 +19,57 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # PR tests are network-free: fakes stand in for yt-dlp, and ffmpeg/ffprobe are only used on
+      # locally generated media. yt-dlp is intentionally not installed here.
       - name: Install dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: |
+          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             cmake \
             build-essential \
             pkg-config \
             libboost-all-dev \
             libssl-dev \
             libcpprest-dev \
-            ffmpeg \
-            python3-pip
-          pip3 install --user yt-dlp
+            ffmpeg
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew update
-          brew install cmake boost cpprestsdk openssl ffmpeg yt-dlp
-
-      - name: Setup build cache (Ubuntu)
-        if: runner.os == 'Linux'
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.ccache
-            ~/.cache/pip
-          key: ${{ runner.os }}-${{ matrix.build-type }}-${{ hashFiles('**/CMakeLists.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.build-type }}-
-            ${{ runner.os }}-
-
-      - name: Setup build cache (macOS)
-        if: runner.os == 'macOS'
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/Library/Caches/ccache
-            ~/Library/Caches/pip
-          key: ${{ runner.os }}-${{ matrix.build-type }}-${{ hashFiles('**/CMakeLists.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.build-type }}-
-            ${{ runner.os }}-
+          set -euo pipefail
+          brew install cmake boost cpprestsdk openssl@3 ffmpeg
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
       - name: Configure CMake
         run: |
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} \
             -DBUILD_TESTS=ON \
-            -DBUILD_API=ON
+            -DBUILD_API=ON \
+            -DYTCONV_WERROR=ON
 
       - name: Build
         run: cmake --build build --parallel
+
+      - name: Require API binary and HTTP tests
+        run: |
+          set -euo pipefail
+          test -x build/yt2mp3-cli
+          test -x build/yt2mp3-api
+          test -x build/yt-converter-api-tests
+          ctest --test-dir build -N | tee build/ctest-list.txt
+          grep -q 'yt-converter-api-tests' build/ctest-list.txt
 
       - name: Forbid shell process APIs
         run: bash tests/check_no_system.sh
 
       - name: Run tests
-        run: ctest --test-dir build --output-on-failure
+        env:
+          # Real-media tests must run, not skip, when ffmpeg/ffprobe are present on CI.
+          YTCONV_REQUIRE_MEDIA_TESTS: "1"
+        run: ctest --test-dir build --output-on-failure --timeout 600
 
       - name: Upload binaries and test logs
         if: always()
@@ -89,21 +80,98 @@ jobs:
             build/yt2mp3-cli
             build/yt2mp3-api
             build/yt-converter-tests
+            build/yt-converter-api-tests
+            build/ctest-list.txt
             build/Testing/Temporary/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
+
+  clean-checkout:
+    name: Configure tracked files from a different directory
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake build-essential pkg-config \
+            libboost-all-dev libssl-dev libcpprest-dev
+      - name: Reject tracked build outputs
+        run: |
+          set -euo pipefail
+          if git ls-files | grep -E '^build/|CMakeCache\.txt$|CMakeFiles/|cmake_install\.cmake$|\.o$|\.a$'; then
+            echo "Generated build files are tracked" >&2
+            exit 1
+          fi
+      - name: Export tracked files and build in build/
+        run: |
+          set -euo pipefail
+          export_dir="$RUNNER_TEMP/export-$RANDOM/YT-Converter"
+          mkdir -p "$export_dir"
+          git archive --format=tar HEAD | tar -x -C "$export_dir"
+          cd "$export_dir"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_API=ON -DBUILD_TESTS=OFF
+          cmake --build build --parallel
+          test -x build/yt2mp3-api
+          test -x build/yt2mp3-cli
+      - name: Missing cpprestsdk fails an explicit API build
+        run: |
+          set -euo pipefail
+          if cmake -S . -B "$RUNNER_TEMP/no-cpprest" -DBUILD_API=ON \
+               -Dcpprestsdk_DIR="$RUNNER_TEMP/does-not-exist" -DCMAKE_DISABLE_FIND_PACKAGE_cpprestsdk=ON \
+               > "$RUNNER_TEMP/no-cpprest.log" 2>&1; then
+            echo "BUILD_API=ON configured without cpprestsdk" >&2
+            exit 1
+          fi
+          grep -q 'BUILD_API=ON requires cpprestsdk' "$RUNNER_TEMP/no-cpprest.log"
+          cmake -S . -B "$RUNNER_TEMP/cli-only" -DBUILD_API=OFF -DCMAKE_DISABLE_FIND_PACKAGE_cpprestsdk=ON
+          cmake --build "$RUNNER_TEMP/cli-only" --parallel
+
+  sanitizers:
+    name: Sanitizers (${{ matrix.sanitizer }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: ["address,undefined", "thread"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake build-essential pkg-config \
+            libboost-all-dev libssl-dev libcpprest-dev ffmpeg
+      - name: Configure
+        run: |
+          # cpprestsdk and Boost.Asio are not TSan-instrumented, so the thread sanitizer job covers
+          # the core library (queue, singleflight, cache, process) without the HTTP layer.
+          api=ON
+          if [ "${{ matrix.sanitizer }}" = "thread" ]; then api=OFF; fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON -DBUILD_API=$api \
+            -DYTCONV_SANITIZE=${{ matrix.sanitizer }}
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+          YTCONV_REQUIRE_MEDIA_TESTS: "1"
+        run: ctest --test-dir build --output-on-failure --timeout 900
 
   build-status:
     name: Build Status Check
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, clean-checkout, sanitizers]
     if: always()
     steps:
       - name: Check build status
         run: |
-          if [ "${{ needs.build.result }}" = "success" ]; then
-            echo "All builds completed successfully"
-            exit 0
-          fi
-          echo "Build failed on one or more platforms"
-          exit 1
+          for result in "${{ needs.build.result }}" "${{ needs.clean-checkout.result }}" \
+                        "${{ needs.sanitizers.result }}"; do
+            if [ "$result" != "success" ]; then
+              echo "A required build gate did not succeed: $result"
+              exit 1
+            fi
+          done
+          echo "All required build gates passed"

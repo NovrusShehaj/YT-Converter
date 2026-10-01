@@ -15,7 +15,8 @@ namespace {
 std::string firstLine(const std::string& text) {
     const std::size_t newline = text.find('\n');
     std::string line = newline == std::string::npos ? text : text.substr(0, newline);
-    while (!line.empty() && (line.back() == '\r' || std::isspace(static_cast<unsigned char>(line.back())))) {
+    while (!line.empty() &&
+           (line.back() == '\r' || std::isspace(static_cast<unsigned char>(line.back())))) {
         line.pop_back();
     }
     return line;
@@ -27,7 +28,8 @@ std::string probeVersion(const std::string& binary, const std::string& flag) {
     options.inherit_stderr = false;
     const auto result = yt::process::run({binary, flag}, options);
     if (result.not_found) {
-        throw Error(ErrorCode::BinaryNotFound, "Required tool not found: " + binary + ". " + installHint());
+        throw Error(ErrorCode::BinaryNotFound,
+                    "Required tool not found: " + binary + ". " + installHint());
     }
     if (result.timed_out) {
         throw Error(ErrorCode::Timeout, "Timed out while checking " + binary);
@@ -36,7 +38,8 @@ std::string probeVersion(const std::string& binary, const std::string& flag) {
         throw Error(ErrorCode::BinaryNotFound,
                     binary + " failed during preflight. " + installHint());
     }
-    const std::string version = firstLine(result.stdout_text.empty() ? result.stderr_text : result.stdout_text);
+    const std::string version =
+        firstLine(result.stdout_text.empty() ? result.stderr_text : result.stdout_text);
     return version.empty() ? binary : version;
 }
 

@@ -18,13 +18,7 @@
 
 namespace yt::jobs {
 
-enum class JobState {
-    Queued,
-    Running,
-    Succeeded,
-    Failed,
-    Canceled
-};
+enum class JobState { Queued, Running, Succeeded, Failed, Canceled };
 
 struct JobSnapshot {
     std::string job_id;
@@ -44,11 +38,7 @@ struct JobSnapshot {
     std::uint64_t queue_ms = 0;
 };
 
-enum class SubmitKind {
-    Queued,
-    Attached,
-    Full
-};
+enum class SubmitKind { Queued, Attached, Full };
 
 struct SubmitResult {
     SubmitKind kind = SubmitKind::Full;
@@ -56,7 +46,7 @@ struct SubmitResult {
 };
 
 class Queue {
-public:
+  public:
     Queue() = default;
     Queue(const Queue&) = delete;
     Queue& operator=(const Queue&) = delete;
@@ -70,7 +60,7 @@ public:
     // 0 missing, 1 canceled, 2 already finished
     int cancel(const std::string& jobId);
 
-private:
+  private:
     struct Record {
         JobSnapshot snapshot;
         std::string leader_id;

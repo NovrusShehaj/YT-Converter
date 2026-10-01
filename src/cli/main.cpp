@@ -15,35 +15,40 @@
 
 namespace {
 
-void handleSignal(int) { yt::process::requestShutdown(); }
+void handleSignal(int) {
+    yt::process::requestShutdown();
+}
 
 void printUsage(const char* programName, bool unicode) {
     const char* dash = unicode ? "—" : "-";
-    std::cout << "YouTube Converter CLI " << YTCONV_VERSION << "\n\n"
-              << "Usage:\n"
-              << "  " << programName << " [options] <URL> [format]\n\n"
-              << "Arguments:\n"
-              << "  URL                 YouTube watch, shorts, embed, live, or youtu.be URL\n"
-              << "  format              Output format: mp3, mp4, or wav (default: mp3)\n\n"
-              << "Options:\n"
-              << "  -h, --help          Show this help and exit\n"
-              << "  -V, --version       Print version and exit\n"
-              << "  -o, --output-dir D  Directory for finished files (default: ./output)\n"
-              << "  -f, --format FMT    Output format\n"
-              << "      --quality N     Max video height for mp4 (default: 1080)\n"
-              << "      --force         Replace an existing output file\n"
-              << "      --refresh       Ignore the source cache and download again\n"
-              << "      --no-unicode    Use ASCII status markers\n"
-              << "  -v, --verbose       Debug logging\n"
-              << "  -q, --quiet         Log errors only\n\n"
-              << "Exit codes:\n"
-              << "  0 success, 2 validation, 3 missing tools, 4 download, 5 convert, 130 canceled\n\n"
-              << "This tool is for personal, localhost use. You are responsible for YouTube\n"
-              << "Terms of Service and copyright compliance. " << dash
-              << " Public internet hosting is out of scope.\n";
+    std::cout
+        << "YouTube Converter CLI " << YTCONV_VERSION << "\n\n"
+        << "Usage:\n"
+        << "  " << programName << " [options] <URL> [format]\n\n"
+        << "Arguments:\n"
+        << "  URL                 YouTube watch, shorts, embed, live, or youtu.be URL\n"
+        << "  format              Output format: mp3, mp4, or wav (default: mp3)\n\n"
+        << "Options:\n"
+        << "  -h, --help          Show this help and exit\n"
+        << "  -V, --version       Print version and exit\n"
+        << "  -o, --output-dir D  Directory for finished files (default: ./output)\n"
+        << "  -f, --format FMT    Output format\n"
+        << "      --quality N     Max video height for mp4 (default: 1080)\n"
+        << "      --force         Replace an existing output file\n"
+        << "      --refresh       Ignore the source cache and download again\n"
+        << "      --no-unicode    Use ASCII status markers\n"
+        << "  -v, --verbose       Debug logging\n"
+        << "  -q, --quiet         Log errors only\n\n"
+        << "Exit codes:\n"
+        << "  0 success, 2 validation, 3 missing tools, 4 download, 5 convert, 130 canceled\n\n"
+        << "This tool is for personal, localhost use. You are responsible for YouTube\n"
+        << "Terms of Service and copyright compliance. " << dash
+        << " Public internet hosting is out of scope.\n";
 }
 
-void printVersion() { std::cout << "yt2mp3-cli " << YTCONV_VERSION << '\n'; }
+void printVersion() {
+    std::cout << "yt2mp3-cli " << YTCONV_VERSION << '\n';
+}
 
 } // namespace
 

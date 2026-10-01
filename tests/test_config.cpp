@@ -7,9 +7,13 @@
 
 namespace {
 
-void setVar(const char* name, const char* value) { setenv(name, value, 1); }
+void setVar(const char* name, const char* value) {
+    setenv(name, value, 1);
+}
 
-void clearVar(const char* name) { unsetenv(name); }
+void clearVar(const char* name) {
+    unsetenv(name);
+}
 
 } // namespace
 

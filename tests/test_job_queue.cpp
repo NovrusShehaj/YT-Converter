@@ -12,8 +12,9 @@
 
 namespace {
 
-yt::converter::ConversionRequest makeRequest(const std::filesystem::path& output, const std::string& url,
-                                             const std::string& format, const std::string& ytdlp) {
+yt::converter::ConversionRequest makeRequest(const std::filesystem::path& output,
+                                             const std::string& url, const std::string& format,
+                                             const std::string& ytdlp) {
     yt::converter::ConversionRequest request;
     request.url = url;
     request.format = format;
@@ -28,14 +29,14 @@ yt::converter::ConversionRequest makeRequest(const std::filesystem::path& output
 }
 
 class StopQueue {
-public:
+  public:
     explicit StopQueue(yt::jobs::Queue& queue) : queue_(queue) {}
     ~StopQueue() { queue_.stop(); }
 
     StopQueue(const StopQueue&) = delete;
     StopQueue& operator=(const StopQueue&) = delete;
 
-private:
+  private:
     yt::jobs::Queue& queue_;
 };
 
@@ -61,12 +62,12 @@ TEST(JobQueue, FullQueueRejectsTheThirdJob) {
     StopQueue stop(queue);
     queue.start(1, 2);
 
-    const auto first = makeRequest(output, "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "mp3",
-                                   fakePath("hang"));
-    const auto second = makeRequest(output, "https://www.youtube.com/watch?v=jNQXAC9IVRw", "mp3",
-                                    fakePath("hang"));
-    const auto third = makeRequest(output, "https://www.youtube.com/watch?v=9bZkp7q19f0", "mp3",
-                                   fakePath("hang"));
+    const auto first =
+        makeRequest(output, "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "mp3", fakePath("hang"));
+    const auto second =
+        makeRequest(output, "https://www.youtube.com/watch?v=jNQXAC9IVRw", "mp3", fakePath("hang"));
+    const auto third =
+        makeRequest(output, "https://www.youtube.com/watch?v=9bZkp7q19f0", "mp3", fakePath("hang"));
     EXPECT_NE(queue.submit(first, "dQw4w9WgXcQ", "job-a").kind, yt::jobs::SubmitKind::Full);
     EXPECT_NE(queue.submit(second, "jNQXAC9IVRw", "job-b").kind, yt::jobs::SubmitKind::Full);
     EXPECT_EQ(queue.submit(third, "9bZkp7q19f0", "job-c").kind, yt::jobs::SubmitKind::Full);

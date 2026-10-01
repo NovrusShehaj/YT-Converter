@@ -84,14 +84,13 @@ bool isSafeRequestId(const std::string& id) {
     if (id.empty() || id.size() > 64) {
         return false;
     }
-    return std::all_of(id.begin(), id.end(), [](unsigned char c) {
-        return std::isalnum(c) || c == '_' || c == '-';
-    });
+    return std::all_of(id.begin(), id.end(),
+                       [](unsigned char c) { return std::isalnum(c) || c == '_' || c == '-'; });
 }
 
 bool isLoopbackRemote(const std::string& remote) {
-    return remote.find("127.0.0.1") != std::string::npos || remote.find("::1") != std::string::npos ||
-           remote == "localhost";
+    return remote.find("127.0.0.1") != std::string::npos ||
+           remote.find("::1") != std::string::npos || remote == "localhost";
 }
 
 json::value errorBody(const yt::Error& error) {
@@ -137,20 +136,28 @@ json::value jobJson(const jobs::JobSnapshot& job) {
     return body;
 }
 
-void onSignal(int) { g_shutdown.store(true); }
+void onSignal(int) {
+    g_shutdown.store(true);
+}
 
 #ifndef _WIN32
-void onUsr1(int) { g_dumpMetrics.store(true); }
+void onUsr1(int) {
+    g_dumpMetrics.store(true);
+}
 #endif
 
 } // namespace
 
-void requestApiShutdown() { g_shutdown.store(true); }
+void requestApiShutdown() {
+    g_shutdown.store(true);
+}
 
-bool apiShutdownRequested() { return g_shutdown.load(); }
+bool apiShutdownRequested() {
+    return g_shutdown.load();
+}
 
 class ApiServer::Impl {
-public:
+  public:
     explicit Impl(Config cfg) : config(std::move(cfg)) {}
 
     Config config;
@@ -261,18 +268,21 @@ public:
                     http_response response(status_codes::MethodNotAllowed);
                     response.headers().add(U("Cache-Control"), U("no-store"));
                     response.headers().add(U("Allow"), U("POST"));
-                    response.set_body(errorBody(ErrorCode::InvalidInput, "Use POST /v1/conversions"));
+                    response.set_body(
+                        errorBody(ErrorCode::InvalidInput, "Use POST /v1/conversions"));
                     request.reply(response);
                     logger.clearContext();
                     return;
                 }
                 if (method != methods::POST) {
-                    replyJson(request, 405, errorBody(ErrorCode::InvalidInput, "Method not allowed"));
+                    replyJson(request, 405,
+                              errorBody(ErrorCode::InvalidInput, "Method not allowed"));
                     logger.clearContext();
                     return;
                 }
                 if (!authorize(request)) {
-                    replyJson(request, 401, errorBody(ErrorCode::Unauthorized, "Missing or invalid API key"));
+                    replyJson(request, 401,
+                              errorBody(ErrorCode::Unauthorized, "Missing or invalid API key"));
                     logger.clearContext();
                     return;
                 }
@@ -326,13 +336,16 @@ public:
         auto& logger = yt::logger::Logger::getInstance();
         if (request.headers().has(U("Content-Length"))) {
             try {
-                const auto length = std::stoll(toUtf8(request.headers().find(U("Content-Length"))->second));
+                const auto length =
+                    std::stoll(toUtf8(request.headers().find(U("Content-Length"))->second));
                 if (length > static_cast<long long>(kMaxBodyBytes)) {
-                    replyJson(request, 400, errorBody(ErrorCode::InvalidInput, "Request body exceeds 8 KB"));
+                    replyJson(request, 400,
+                              errorBody(ErrorCode::InvalidInput, "Request body exceeds 8 KB"));
                     return;
                 }
             } catch (const std::exception&) {
-                replyJson(request, 400, errorBody(ErrorCode::InvalidInput, "Invalid Content-Length"));
+                replyJson(request, 400,
+                          errorBody(ErrorCode::InvalidInput, "Invalid Content-Length"));
                 return;
             }
         }
@@ -341,7 +354,8 @@ public:
             contentType = request.headers().find(U("Content-Type"))->second;
         }
         if (contentType.find(U("application/json")) == utility::string_t::npos) {
-            replyJson(request, 400, errorBody(ErrorCode::InvalidInput, "Content-Type must be application/json"));
+            replyJson(request, 400,
+                      errorBody(ErrorCode::InvalidInput, "Content-Type must be application/json"));
             return;
         }
 
@@ -349,11 +363,13 @@ public:
         try {
             raw = toUtf8(request.extract_string().get());
         } catch (...) {
-            replyJson(request, 400, errorBody(ErrorCode::InvalidInput, "Request body must be JSON"));
+            replyJson(request, 400,
+                      errorBody(ErrorCode::InvalidInput, "Request body must be JSON"));
             return;
         }
         if (raw.size() > kMaxBodyBytes) {
-            replyJson(request, 400, errorBody(ErrorCode::InvalidInput, "Request body exceeds 8 KB"));
+            replyJson(request, 400,
+                      errorBody(ErrorCode::InvalidInput, "Request body exceeds 8 KB"));
             return;
         }
 
@@ -361,13 +377,15 @@ public:
         try {
             body = json::value::parse(toT(raw));
         } catch (...) {
-            replyJson(request, 400, errorBody(ErrorCode::InvalidInput, "Request body must be JSON"));
+            replyJson(request, 400,
+                      errorBody(ErrorCode::InvalidInput, "Request body must be JSON"));
             return;
         }
-        if (!body.has_field(U("url")) || !body.has_field(U("format")) || !body.at(U("url")).is_string() ||
-            !body.at(U("format")).is_string()) {
+        if (!body.has_field(U("url")) || !body.has_field(U("format")) ||
+            !body.at(U("url")).is_string() || !body.at(U("format")).is_string()) {
             replyJson(request, 400,
-                      errorBody(ErrorCode::InvalidInput, "JSON must include string fields url and format"));
+                      errorBody(ErrorCode::InvalidInput,
+                                "JSON must include string fields url and format"));
             return;
         }
 
@@ -389,21 +407,24 @@ public:
         }
 
         const auto parsed = yt::validation::parseYouTubeUrl(url);
-        if (!parsed.ok()) {
+        if (!parsed.video.has_value()) {
             replyJson(request, 400, errorBody(parsed.code, parsed.message));
             return;
         }
         const std::string videoId = parsed.video->id;
         const std::string normalizedFormat = yt::validation::requireFormat(format);
         const fs::path outputRoot(resolveOutputRoot(config.output_dir));
-        const fs::path finalPath = outputRoot / yt::converter::getOutputFilename(videoId, normalizedFormat);
+        const fs::path finalPath =
+            outputRoot / yt::converter::getOutputFilename(videoId, normalizedFormat);
 
-        if (config.reuse_completed && !force && !refresh && fs::exists(finalPath) && fs::file_size(finalPath) > 0) {
+        if (config.reuse_completed && !force && !refresh && fs::exists(finalPath) &&
+            fs::file_size(finalPath) > 0) {
             json::value ok;
             ok[U("status")] = json::value::string(U("success"));
             ok[U("error_code")] = json::value::string(U("ok"));
             ok[U("message")] = json::value::string(U("Reused existing output"));
-            ok[U("output_path")] = json::value::string(toT(fs::weakly_canonical(finalPath).string()));
+            ok[U("output_path")] =
+                json::value::string(toT(fs::weakly_canonical(finalPath).string()));
             ok[U("job_id")] = json::value::string(toT(videoId + "-" + normalizedFormat));
             ok[U("reused")] = json::value::boolean(true);
             ok[U("request_id")] = json::value::string(toT(requestId));
@@ -464,7 +485,11 @@ ApiServer::ApiServer(Config config) : impl_(std::make_unique<Impl>(std::move(con
 ApiServer::~ApiServer() {
     try {
         stop();
+    } catch (const std::exception& error) {
+        yt::logger::Logger::getInstance().error(std::string("API shutdown failed: ") +
+                                                error.what());
     } catch (...) {
+        yt::logger::Logger::getInstance().error("API shutdown failed");
     }
 }
 
@@ -475,9 +500,12 @@ void ApiServer::start() {
     impl_->jobQueue.start(impl_->config.max_concurrent, impl_->config.queue_depth);
     impl_->listener = std::make_unique<http_listener>(toT(impl_->url()));
     auto* impl = impl_.get();
-    impl_->listener->support(methods::GET, [impl](const http_request& request) { impl->handle(request); });
-    impl_->listener->support(methods::POST, [impl](const http_request& request) { impl->handle(request); });
-    impl_->listener->support(methods::DEL, [impl](const http_request& request) { impl->handle(request); });
+    impl_->listener->support(methods::GET,
+                             [impl](const http_request& request) { impl->handle(request); });
+    impl_->listener->support(methods::POST,
+                             [impl](const http_request& request) { impl->handle(request); });
+    impl_->listener->support(methods::DEL,
+                             [impl](const http_request& request) { impl->handle(request); });
     impl_->listener->open().wait();
     impl_->running.store(true);
     yt::logger::Logger::getInstance().info("HTTP listener opened on " + impl_->url());
@@ -510,10 +538,16 @@ void ApiServer::runUntilSignal() {
     stop();
 }
 
-bool ApiServer::isRunning() const { return impl_->running.load(); }
+bool ApiServer::isRunning() const {
+    return impl_->running.load();
+}
 
-std::string ApiServer::listenUrl() const { return impl_->url(); }
+std::string ApiServer::listenUrl() const {
+    return impl_->url();
+}
 
-int ApiServer::port() const { return impl_->config.port; }
+int ApiServer::port() const {
+    return impl_->config.port;
+}
 
 } // namespace yt::api

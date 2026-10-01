@@ -56,7 +56,9 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Binaries land in `build/yt2mp3-cli` and, if cpprestsdk is present, `build/yt2mp3-api`.
+Binaries land in `build/yt2mp3-cli` and `build/yt2mp3-api`. `BUILD_API` defaults to `ON`, and an
+API build fails at configure time when cpprestsdk is missing instead of silently dropping the API.
+For a CLI-only build, pass `-DBUILD_API=OFF` explicitly.
 
 ```sh
 ./build/yt2mp3-cli --help

@@ -60,7 +60,8 @@ TEST(Process, LargeStdoutCompletesWithoutTimeout) {
         std::ofstream in(script);
         in << "#!/bin/bash\n" << "printf '%s' '" << megabyte << "'\n";
     }
-    std::filesystem::permissions(script, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
+    std::filesystem::permissions(script, std::filesystem::perms::owner_all,
+                                 std::filesystem::perm_options::replace);
     yt::process::RunOptions options;
     options.timeout_ms = 5000;
     options.capture_stdout = true;
@@ -88,8 +89,9 @@ TEST(Process, ProgressLinesAreDelivered) {
         in << "print('[download] 50%% of ~100MB')\n";
         in << "sys.exit(0)\n";
     }
-    std::filesystem::permissions(script, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
-    
+    std::filesystem::permissions(script, std::filesystem::perms::owner_all,
+                                 std::filesystem::perm_options::replace);
+
     std::string capturedLine;
     bool lineReceived = false;
 
@@ -100,8 +102,10 @@ TEST(Process, ProgressLinesAreDelivered) {
     opts.max_output_bytes = 8192;
     opts.on_line = [](const std::string& line, void* user) {
         auto* d = static_cast<CallbackData*>(user);
-        if (d->line) d->line->assign(line);
-        if (d->received) *d->received = true;
+        if (d->line)
+            d->line->assign(line);
+        if (d->received)
+            *d->received = true;
     };
     auto* userData = new CallbackData;
     userData->line = &capturedLine;

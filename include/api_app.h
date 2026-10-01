@@ -9,7 +9,7 @@
 namespace yt::api {
 
 class ApiServer {
-public:
+  public:
     explicit ApiServer(Config config);
     ~ApiServer();
 
@@ -23,7 +23,7 @@ public:
     std::string listenUrl() const;
     int port() const;
 
-private:
+  private:
     class Impl;
     std::unique_ptr<Impl> impl_;
 };

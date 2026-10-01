@@ -26,7 +26,7 @@ yt::Config testConfig(const std::filesystem::path& output, const std::string& yt
 } // namespace
 
 class ConverterTest : public ::testing::Test {
-protected:
+  protected:
     void SetUp() override {
         yt::process::resetShutdownForTests();
         output_ = makeTestDir();
@@ -81,8 +81,10 @@ TEST_F(ConverterTest, Mp4UsesVideoFormatSelector) {
     EXPECT_NE(ytdlpArgv.find("bestvideo"), std::string::npos);
     EXPECT_NE(ytdlpArgv.find("--merge-output-format"), std::string::npos);
     EXPECT_FALSE(std::filesystem::exists(output_ / "ffmpeg.argv"));
-    EXPECT_NE(ytdlpArgv.find("--concurrent-fragments"), std::string::npos) << "Missing --concurrent-fragments in argv";
-    EXPECT_NE(ytdlpArgv.find("--fragment-retries"), std::string::npos) << "Missing --fragment-retries in argv";
+    EXPECT_NE(ytdlpArgv.find("--concurrent-fragments"), std::string::npos)
+        << "Missing --concurrent-fragments in argv";
+    EXPECT_NE(ytdlpArgv.find("--fragment-retries"), std::string::npos)
+        << "Missing --fragment-retries in argv";
     EXPECT_NE(ytdlpArgv.find("--cache-dir"), std::string::npos) << "Missing --cache-dir in argv";
     EXPECT_TRUE(result.convert_ms == 0u || result.convert_ms > 0);
     EXPECT_FALSE(std::filesystem::exists(output_ / "jobs" / result.job_id));
@@ -167,11 +169,14 @@ TEST_F(ConverterTest, Mp4IncludesFragmentConcurrencyFlags) {
     request.config.fragment_retries = 10;
     yt::converter::processVideo(request);
     const std::string ytdlpArgv = readFile(output_ / "yt-dlp.argv");
-    EXPECT_NE(ytdlpArgv.find("--concurrent-fragments"), std::string::npos) << "Missing --concurrent-fragments in argv";
+    EXPECT_NE(ytdlpArgv.find("--concurrent-fragments"), std::string::npos)
+        << "Missing --concurrent-fragments in argv";
     EXPECT_NE(ytdlpArgv.find("4"), std::string::npos) << "Missing fragment count 4 in argv";
-    EXPECT_NE(ytdlpArgv.find("--fragment-retries"), std::string::npos) << "Missing --fragment-retries in argv";
+    EXPECT_NE(ytdlpArgv.find("--fragment-retries"), std::string::npos)
+        << "Missing --fragment-retries in argv";
     EXPECT_NE(ytdlpArgv.find("10"), std::string::npos) << "Missing retry count 10 in argv";
-    EXPECT_NE(ytdlpArgv.find("--retry-sleep"), std::string::npos) << "Missing --retry-sleep in argv";
+    EXPECT_NE(ytdlpArgv.find("--retry-sleep"), std::string::npos)
+        << "Missing --retry-sleep in argv";
     EXPECT_NE(ytdlpArgv.find("--cache-dir"), std::string::npos) << "Missing --cache-dir in argv";
 }
 

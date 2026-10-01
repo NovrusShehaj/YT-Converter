@@ -26,16 +26,14 @@ jobs:
         run: brew install cmake boost cpprestsdk openssl
       - name: Configure and build
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_API=ON -DBUILD_TESTS=OFF
           cmake --build build --parallel
       - name: Package
         run: |
           os_name=$(echo '${{ matrix.os }}' | tr '-' '_')
           mkdir -p dist
           cp build/yt2mp3-cli "dist/yt2mp3-cli-${os_name}"
-          if [ -f build/yt2mp3-api ]; then
-            cp build/yt2mp3-api "dist/yt2mp3-api-${os_name}"
-          fi
+          cp build/yt2mp3-api "dist/yt2mp3-api-${os_name}"
           (cd dist && sha256sum * > SHA256SUMS-${os_name}.txt || shasum -a 256 * > SHA256SUMS-${os_name}.txt)
       - uses: actions/upload-artifact@v4
         with:

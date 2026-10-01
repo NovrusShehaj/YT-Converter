@@ -56,11 +56,8 @@ Logger& Logger::getInstance() {
 }
 
 Logger::Logger()
-    : currentLogLevel(LogLevel::INFO),
-      currentLogFormat(LogFormat::Text),
-      consoleOutputEnabled(true),
-      fileOutputEnabled(false),
-      logFileName("converter.log") {}
+    : currentLogLevel(LogLevel::INFO), currentLogFormat(LogFormat::Text),
+      consoleOutputEnabled(true), fileOutputEnabled(false), logFileName("converter.log") {}
 
 Logger::~Logger() {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -101,19 +98,33 @@ void Logger::setFileOutput(bool enabled, const std::string& filename) {
     }
 }
 
-void Logger::setContext(const LogContext& context) { t_context = context; }
+void Logger::setContext(const LogContext& context) {
+    t_context = context;
+}
 
-void Logger::clearContext() { t_context = LogContext{}; }
+void Logger::clearContext() {
+    t_context = LogContext{};
+}
 
-void Logger::debug(const std::string& message) { log(LogLevel::DEBUG, message); }
+void Logger::debug(const std::string& message) {
+    log(LogLevel::DEBUG, message);
+}
 
-void Logger::info(const std::string& message) { log(LogLevel::INFO, message); }
+void Logger::info(const std::string& message) {
+    log(LogLevel::INFO, message);
+}
 
-void Logger::warning(const std::string& message) { log(LogLevel::WARNING, message); }
+void Logger::warning(const std::string& message) {
+    log(LogLevel::WARNING, message);
+}
 
-void Logger::error(const std::string& message) { log(LogLevel::ERROR, message); }
+void Logger::error(const std::string& message) {
+    log(LogLevel::ERROR, message);
+}
 
-void Logger::critical(const std::string& message) { log(LogLevel::CRITICAL, message); }
+void Logger::critical(const std::string& message) {
+    log(LogLevel::CRITICAL, message);
+}
 
 void Logger::log(LogLevel level, const std::string& message) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -153,9 +164,8 @@ std::string Logger::levelToString(LogLevel level) const {
 std::string Logger::getCurrentTimestamp() const {
     const auto now = std::chrono::system_clock::now();
     const std::time_t time = std::chrono::system_clock::to_time_t(now);
-    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        now.time_since_epoch()) %
-                    1000;
+    const auto ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
     std::tm local{};
 #ifdef _WIN32
     localtime_s(&local, &time);

@@ -21,8 +21,9 @@ if [ "${#missing[@]}" -gt 0 ]; then
   exit 1
 fi
 
-echo "Configuring (BUILD_TESTS=ON)"
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON
+# BUILD_API=ON (the default) requires cpprestsdk. Use BUILD_API=OFF ./quick-test.sh for CLI only.
+echo "Configuring (BUILD_TESTS=ON, BUILD_API=${BUILD_API:-ON})"
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON -DBUILD_API="${BUILD_API:-ON}"
 echo "Building"
 cmake --build build --parallel
 echo "Testing"

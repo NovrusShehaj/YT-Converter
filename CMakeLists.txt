@@ -19,28 +19,43 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+option(BUILD_TESTS "Build unit tests" OFF)
+option(BUILD_API "Build the localhost REST API (requires cpprestsdk)" ON)
+option(YTCONV_WERROR "Treat compiler warnings as errors" OFF)
+set(YTCONV_SANITIZE "" CACHE STRING
+    "Comma-separated sanitizers for GCC/Clang builds, for example address,undefined or thread")
+
 if(MSVC)
     add_compile_options(/W4 /WX)
 else()
     add_compile_options(-Wall -Wextra -Wpedantic)
+    if(YTCONV_WERROR)
+        add_compile_options(-Werror)
+    endif()
     if(CMAKE_BUILD_TYPE MATCHES Debug)
         add_compile_options(-g -O0)
     else()
         add_compile_options(-O3)
     endif()
+    if(YTCONV_SANITIZE)
+        add_compile_options(-fsanitize=${YTCONV_SANITIZE} -fno-omit-frame-pointer -g)
+        add_link_options(-fsanitize=${YTCONV_SANITIZE})
+    endif()
 endif()
-
-option(BUILD_TESTS "Build unit tests" OFF)
-option(BUILD_API "Build the localhost REST API" ON)
 
 find_package(Threads REQUIRED)
-find_package(cpprestsdk QUIET CONFIG)
-if(BUILD_API AND NOT cpprestsdk_FOUND)
-    message(WARNING "cpprestsdk not found; yt2mp3-api will not be built")
-    set(BUILD_API OFF)
-endif()
 
 if(BUILD_API)
+    # An explicitly requested API build must not silently degrade to CLI-only.
+    find_package(cpprestsdk CONFIG QUIET)
+    if(NOT cpprestsdk_FOUND)
+        message(FATAL_ERROR
+            "BUILD_API=ON requires cpprestsdk, but its CMake package was not found.\n"
+            "Install it (Debian/Ubuntu: apt-get install libcpprest-dev libboost-all-dev libssl-dev; "
+            "macOS: brew install cpprestsdk boost openssl) or point CMAKE_PREFIX_PATH / "
+            "cpprestsdk_DIR at an existing installation.\n"
+            "For a CLI-only build, configure with -DBUILD_API=OFF.")
+    endif()
     find_package(Boost REQUIRED)
     find_package(OpenSSL REQUIRED)
 endif()
@@ -137,10 +152,6 @@ if(BUILD_TESTS)
         PRIVATE
             YTCONV_FAKE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fakes"
     )
-    if(BUILD_API)
-        target_sources(yt-converter-tests PRIVATE tests/test_api.cpp)
-        target_link_libraries(yt-converter-tests PRIVATE yt-converter-api)
-    endif()
 
     file(GLOB YTCONV_FAKES ${CMAKE_CURRENT_SOURCE_DIR}/tests/fakes/*)
     foreach(fake ${YTCONV_FAKES})
@@ -148,6 +159,22 @@ if(BUILD_TESTS)
     endforeach()
 
     add_test(NAME yt-converter-tests COMMAND yt-converter-tests)
+
+    if(BUILD_API)
+        # HTTP tests live in their own binary so CI can prove they were built and run.
+        add_executable(yt-converter-api-tests tests/test_api.cpp)
+        target_link_libraries(yt-converter-api-tests
+            PRIVATE
+                yt-converter-api
+                GTest::gtest
+                GTest::gtest_main
+        )
+        target_compile_definitions(yt-converter-api-tests
+            PRIVATE
+                YTCONV_FAKE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fakes"
+        )
+        add_test(NAME yt-converter-api-tests COMMAND yt-converter-api-tests)
+    endif()
     add_test(NAME no_system_in_src COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_no_system.sh)
     add_test(NAME cli_help COMMAND yt2mp3-cli --help)
     add_test(NAME cli_version COMMAND yt2mp3-cli --version)

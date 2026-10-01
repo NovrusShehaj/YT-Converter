@@ -34,7 +34,9 @@ bool isYoutuBeHost(const std::string& host) {
     return host == "youtu.be" || host == "www.youtu.be";
 }
 
-bool isAllowedHost(const std::string& host) { return isYoutubeHost(host) || isYoutuBeHost(host); }
+bool isAllowedHost(const std::string& host) {
+    return isYoutubeHost(host) || isYoutuBeHost(host);
+}
 
 std::vector<std::string> splitPath(const std::string& path) {
     std::vector<std::string> parts;
@@ -212,14 +214,18 @@ ParseOutcome parseYouTubeUrl(const std::string& rawUrl) {
     return fail(ErrorCode::InvalidUrl, "Invalid YouTube URL format");
 }
 
-bool isValidURL(const std::string& url) { return parseYouTubeUrl(url).ok(); }
+bool isValidURL(const std::string& url) {
+    return parseYouTubeUrl(url).ok();
+}
 
 bool isValidFormat(const std::string& format) {
     const std::string normalized = normalizeFormat(format);
     return normalized == "mp3" || normalized == "mp4" || normalized == "wav";
 }
 
-std::vector<std::string> getSupportedFormats() { return {"mp3", "mp4", "wav"}; }
+std::vector<std::string> getSupportedFormats() {
+    return {"mp3", "mp4", "wav"};
+}
 
 std::string getURLValidationError(const std::string& url) {
     return parseYouTubeUrl(url).message;
@@ -232,7 +238,9 @@ std::string getFormatValidationError(const std::string& format) {
     return "Invalid format '" + format + "'. Supported formats are: mp3, mp4, wav";
 }
 
-std::string normalizeFormat(const std::string& format) { return toLower(trim(format)); }
+std::string normalizeFormat(const std::string& format) {
+    return toLower(trim(format));
+}
 
 std::optional<std::string> validateConverterInput(const std::string& url,
                                                   const std::string& format) {
@@ -248,7 +256,7 @@ std::optional<std::string> validateConverterInput(const std::string& url,
 
 VideoRef requireVideo(const std::string& url) {
     const ParseOutcome parsed = parseYouTubeUrl(url);
-    if (!parsed.ok()) {
+    if (!parsed.video.has_value()) {
         throw Error(parsed.code, parsed.message);
     }
     return *parsed.video;

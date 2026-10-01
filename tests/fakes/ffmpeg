@@ -2,10 +2,17 @@
 set -euo pipefail
 LOGDIR="${YTCONV_FAKE_LOG_DIR:-.}"
 mkdir -p "$LOGDIR"
+
+if [[ "${1:-}" == "-version" ]]; then
+  echo 1 >> "$LOGDIR/ffmpeg.version.count"
+  echo "ffmpeg version 0.0-fake"
+  exit 0
+fi
+
 printf '%s\n' "$@" > "$LOGDIR/ffmpeg.argv"
 echo 1 >> "$LOGDIR/ffmpeg.count"
 
 out="${@: -1}"
-mkdir -p "$(dirname "$out")"
+mkdir -p -- "$(dirname -- "$out")"
 printf 'FAKEOUT' > "$out"
 exit 0

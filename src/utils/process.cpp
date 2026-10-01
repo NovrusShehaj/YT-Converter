@@ -45,7 +45,7 @@ void appendBounded(std::string& buffer, const char* data, std::size_t n, std::si
 }
 
 void consumeChunk(std::string& buffer, std::string& pending, const char* data, std::size_t n,
-                   std::size_t maxBytes, const RunOptions& options) {
+                  std::size_t maxBytes, const RunOptions& options) {
     appendBounded(buffer, data, n, maxBytes);
     if (options.on_line == nullptr) {
         return;
@@ -235,7 +235,8 @@ RunResult runPosix(const std::vector<std::string>& argv, const RunOptions& optio
     }
 
     pid_t pid = 0;
-    const int spawnRc = posix_spawnp(&pid, owned[0].c_str(), &actions, &attrs, ptrs.data(), environ);
+    const int spawnRc =
+        posix_spawnp(&pid, owned[0].c_str(), &actions, &attrs, ptrs.data(), environ);
     if (outPipe[1] >= 0) {
         ::close(outPipe[1]);
         outPipe[1] = -1;
@@ -339,10 +340,12 @@ RunResult runPosix(const std::vector<std::string>& argv, const RunOptions& optio
         const pid_t waited = ::waitpid(pid, &status, WNOHANG);
         if (waited == pid) {
             if (outRead.fd >= 0) {
-                drainFd(outRead.fd, result.stdout_text, outPending, options.max_output_bytes, options);
+                drainFd(outRead.fd, result.stdout_text, outPending, options.max_output_bytes,
+                        options);
             }
             if (errRead.fd >= 0) {
-                drainFd(errRead.fd, result.stderr_text, errPending, options.max_output_bytes, options);
+                drainFd(errRead.fd, result.stderr_text, errPending, options.max_output_bytes,
+                        options);
             }
             flushPending(outPending, options);
             flushPending(errPending, options);
@@ -370,8 +373,7 @@ std::wstring utf8ToWide(const std::string& value) {
     if (value.empty()) {
         return std::wstring();
     }
-    const int needed =
-        MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, nullptr, 0);
+    const int needed = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, nullptr, 0);
     std::wstring out(static_cast<std::size_t>(needed), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, out.data(), needed);
     if (!out.empty() && out.back() == L'\0') {
@@ -483,8 +485,9 @@ RunResult runWindows(const std::vector<std::string>& argv, const RunOptions& opt
     CloseHandle(pi.hThread);
     registerChild(pi.hProcess);
 
-    const auto deadline = std::chrono::steady_clock::now() +
-                          std::chrono::milliseconds(options.timeout_ms < 0 ? 86400000 : options.timeout_ms);
+    const auto deadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(options.timeout_ms < 0 ? 86400000 : options.timeout_ms);
     bool cancelArmed = false;
     auto cancelKillAt = std::chrono::steady_clock::time_point{};
     std::string outPending;
@@ -501,7 +504,8 @@ RunResult runWindows(const std::vector<std::string>& argv, const RunOptions& opt
         }
         while (available > 0) {
             char chunk[4096];
-            const DWORD toRead = available > sizeof(chunk) ? static_cast<DWORD>(sizeof(chunk)) : available;
+            const DWORD toRead =
+                available > sizeof(chunk) ? static_cast<DWORD>(sizeof(chunk)) : available;
             DWORD n = 0;
             if (!ReadFile(handle, chunk, toRead, &n, nullptr) || n == 0) {
                 break;
@@ -513,14 +517,16 @@ RunResult runWindows(const std::vector<std::string>& argv, const RunOptions& opt
 
     while (true) {
         const auto now = std::chrono::steady_clock::now();
-        const bool cancelRequested = g_shutdown.load() || (options.cancel && options.cancel->load());
+        const bool cancelRequested =
+            g_shutdown.load() || (options.cancel && options.cancel->load());
         if (cancelRequested && !cancelArmed && !result.timed_out) {
             result.canceled = true;
             cancelArmed = true;
             cancelKillAt = now + std::chrono::seconds(2);
             GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pi.dwProcessId);
         }
-        if ((cancelArmed && now >= cancelKillAt) || (!result.timed_out && !cancelArmed && now >= deadline)) {
+        if ((cancelArmed && now >= cancelKillAt) ||
+            (!result.timed_out && !cancelArmed && now >= deadline)) {
             if (!cancelArmed && now >= deadline) {
                 result.timed_out = true;
             }
@@ -581,8 +587,12 @@ void requestShutdown() {
     g_shutdown.store(true);
 }
 
-bool shutdownRequested() { return g_shutdown.load(); }
+bool shutdownRequested() {
+    return g_shutdown.load();
+}
 
-void resetShutdownForTests() { g_shutdown.store(false); }
+void resetShutdownForTests() {
+    g_shutdown.store(false);
+}
 
 } // namespace yt::process

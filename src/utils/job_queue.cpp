@@ -107,7 +107,8 @@ SubmitResult Queue::submit(converter::ConversionRequest request, const std::stri
         }
     }
 
-    const std::size_t unfinished = waiting_.size() + static_cast<std::size_t>(std::max(0, running_));
+    const std::size_t unfinished =
+        waiting_.size() + static_cast<std::size_t>(std::max(0, running_));
     if (unfinished >= capacity_) {
         result.kind = SubmitKind::Full;
         return result;
@@ -158,7 +159,8 @@ int Queue::cancel(const std::string& jobId) {
     if (!target) {
         return 0;
     }
-    if (target->snapshot.state == JobState::Succeeded || target->snapshot.state == JobState::Failed ||
+    if (target->snapshot.state == JobState::Succeeded ||
+        target->snapshot.state == JobState::Failed ||
         target->snapshot.state == JobState::Canceled) {
         return 2;
     }
@@ -167,7 +169,8 @@ int Queue::cancel(const std::string& jobId) {
     target->snapshot.error_code = "canceled";
     target->snapshot.message = "Canceled";
     clearActiveLocked(*target);
-    waiting_.erase(std::remove(waiting_.begin(), waiting_.end(), target->snapshot.job_id), waiting_.end());
+    waiting_.erase(std::remove(waiting_.begin(), waiting_.end(), target->snapshot.job_id),
+                   waiting_.end());
     return 1;
 }
 
@@ -241,7 +244,8 @@ void Queue::workerLoop(int workerIndex) {
             std::lock_guard<std::mutex> lock(mutex_);
             record->snapshot.state = JobState::Running;
             record->snapshot.stage = "download";
-            record->snapshot.queue_ms = static_cast<std::uint64_t>(std::max<std::int64_t>(0, queueMs));
+            record->snapshot.queue_ms =
+                static_cast<std::uint64_t>(std::max<std::int64_t>(0, queueMs));
             record->snapshot.message = "Running";
         }
         yt::metrics::recordQueueMs(static_cast<std::uint64_t>(std::max<std::int64_t>(0, queueMs)));
@@ -274,7 +278,8 @@ void Queue::workerLoop(int workerIndex) {
                 record->snapshot.stage = "done";
                 record->snapshot.output_path = conversion.output_path;
                 record->snapshot.error_code = "ok";
-                record->snapshot.message = conversion.reused ? "Reused existing output" : "Conversion completed";
+                record->snapshot.message =
+                    conversion.reused ? "Reused existing output" : "Conversion completed";
                 record->snapshot.reused = conversion.reused;
                 record->snapshot.download_ms = conversion.download_ms;
                 record->snapshot.convert_ms = conversion.convert_ms;

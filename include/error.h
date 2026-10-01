@@ -27,7 +27,7 @@ enum class ErrorCode {
 };
 
 class Error : public std::runtime_error {
-public:
+  public:
     Error(ErrorCode code, std::string message);
 
     ErrorCode code() const noexcept { return code_; }
@@ -36,7 +36,7 @@ public:
     int httpStatus() const noexcept;
     int exitCode() const noexcept;
 
-private:
+  private:
     ErrorCode code_;
     std::string message_;
 };
