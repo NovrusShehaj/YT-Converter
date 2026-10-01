@@ -1,6 +1,6 @@
 # Architecture
 
-YT-Converter is a small local tool: two binaries share a static core library. It downloads one YouTube video with `yt-dlp` and transcodes with `ffmpeg`. There is no frontend, database, queue, or cluster.
+YT-Converter is a small local tool: two binaries share a static core library. It downloads one YouTube video with `yt-dlp` and transcodes with `ffmpeg`. There is no frontend and no database. The API keeps an in-process queue so HTTP threads are not blocked on a download.
 
 ## Binaries
 
@@ -18,6 +18,8 @@ yt2mp3-api          src/api/server.cpp + src/api/api_app.cpp
         error.cpp
         dependencies.cpp
         job_limiter.cpp
+        job_queue.cpp
+        singleflight.cpp
         metrics.cpp
 ```
 
@@ -27,8 +29,8 @@ yt2mp3-api          src/api/server.cpp + src/api/api_app.cpp
 2. `yt::validation::parseYouTubeUrl` full-string parse. Allowed hosts: `youtube.com`, `www.`, `m.`, `music.`, `youtu.be`. Allowed paths: `/watch?v=`, `/shorts/`, `/embed/`, `/live/`, `youtu.be/<id>`. ID must be `^[A-Za-z0-9_-]{11}$`. Playlist-only and channel URLs fail with typed errors.
 3. Download URL is always `https://www.youtube.com/watch?v=<id>`. Original user input is not passed to yt-dlp.
 4. `yt::process::run(argv)` starts the child with a real argv array. No `system()`, `popen()`, or shell concatenation.
-5. Work happens under `<output_root>/jobs/<job_id>/`. On success the final file is `<output_root>/<id>.<fmt>` and temps are deleted. On failure temps and incomplete output are deleted.
-6. CLI prints the absolute path. API returns JSON with `output_path` and `job_id`.
+5. Audio downloads land in `<output_root>/cache/src/<id>/audio/` and are shared by MP3 and WAV. MP4 is published with a hard link or copy when yt-dlp already wrote an `.mp4`; other containers are remuxed with ffmpeg. Finished files are `<output_root>/<id>.<fmt>`. A crash leaves `*.partial`, not a truncated final name.
+6. CLI prints the absolute path. `POST /v1/conversions` returns `202` and a job URL. `GET /v1/jobs/{id}` reports stage, percent, and timings.
 
 ## Process execution
 
@@ -40,9 +42,9 @@ ffmpeg flags include `-y -nostdin -hide_banner -loglevel error`.
 
 ## Concurrency and shutdown
 
-The API uses a process-wide `JobLimiter` (`YTCONV_MAX_CONCURRENT`, default 1). Same video ID is serialized with a per-ID mutex. Distinct jobs never share temp paths.
+The API runs `YTCONV_MAX_CONCURRENT` workers (default 2) behind a queue of depth `YTCONV_QUEUE_DEPTH` (default 8). A full queue returns 503. Identical in-flight video and format pairs share one download. Cancel sends SIGTERM, waits up to 2 seconds, then SIGKILL for that child only.
 
-`SIGINT` and `SIGTERM` stop the listener, set a shutdown flag, and kill tracked children. New conversions after shutdown return 503.
+`SIGINT` and `SIGTERM` stop the listener and cancel tracked children. New conversions after shutdown return 503. High-frequency probes use `/v1/healthz`. `/v1/readyz` caches tool checks for `YTCONV_READY_TTL_SEC`.
 
 ## Configuration and security defaults
 

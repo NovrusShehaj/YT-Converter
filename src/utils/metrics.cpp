@@ -49,6 +49,17 @@ void recordBytesDownloaded(std::uint64_t bytes) {
     global().bytes_downloaded.fetch_add(bytes);
 }
 
+void recordQueueMs(std::uint64_t ms) {
+    global().queue_ms_total.fetch_add(ms);
+}
+
+void recordReadyCheck(bool spawned) {
+    global().ready_checks.fetch_add(1);
+    if (spawned) {
+        global().ready_spawns.fetch_add(1);
+    }
+}
+
 std::string toJson() {
     const auto& counters = global();
     std::ostringstream ss;
@@ -60,7 +71,9 @@ std::string toJson() {
        << ",\"download_ms_total\":" << counters.download_ms_total.load()
        << ",\"convert_ms_total\":" << counters.convert_ms_total.load()
        << ",\"queue_ms_total\":" << counters.queue_ms_total.load()
-       << ",\"bytes_downloaded\":" << counters.bytes_downloaded.load() << '}';
+       << ",\"bytes_downloaded\":" << counters.bytes_downloaded.load()
+       << ",\"ready_checks\":" << counters.ready_checks.load()
+       << ",\"ready_spawns\":" << counters.ready_spawns.load() << '}';
     return ss.str();
 }
 

@@ -14,14 +14,17 @@ for arg in "$@"; do
   prev="$arg"
 done
 
+if [[ -n "${YTCONV_FAKE_SLEEP:-}" ]]; then
+  sleep "$YTCONV_FAKE_SLEEP"
+fi
+
 if [[ -n "$out" ]]; then
   mkdir -p "$(dirname "$out")"
-  ext="mp4"
+  ext="${YTCONV_FAKE_EXT:-mp4}"
   final_out="$out"
   if [[ "$out" == *"%(ext)s"* ]]; then
     final_out="${out//\%(ext)s/$ext}"
   fi
-  # Write the file for any output path
   printf 'FAKE' > "$final_out"
 fi
 exit 0

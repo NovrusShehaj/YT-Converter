@@ -124,6 +124,7 @@ if(BUILD_TESTS)
         tests/test_error.cpp
         tests/test_config.cpp
         tests/test_logger.cpp
+        tests/test_job_queue.cpp
     )
     add_executable(yt-converter-tests ${TEST_SOURCES})
     target_link_libraries(yt-converter-tests

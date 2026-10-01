@@ -2,20 +2,30 @@
 #define YT_CONVERTER_SINGLEFLIGHT_H
 
 #include <condition_variable>
+#include <cstdint>
 #include <map>
+#include <memory>
 #include <mutex>
-#include <optional>
 #include <string>
-#include <shared_mutex>
 
 namespace yt::singleflight {
 
-struct InFlight {
+struct Flight {
+    std::mutex mu;
     std::condition_variable cv;
-    std::mutex mutex;
-    std::optional<std::string> result; // job id that's doing the work
-    std::string error;
     bool done = false;
+    bool ok = false;
+    int error_code = 0;
+    std::string error;
+    std::string value;
+    std::uint64_t download_ms = 0;
+    std::uint64_t convert_ms = 0;
+    std::uint64_t bytes = 0;
+};
+
+struct Membership {
+    std::shared_ptr<Flight> flight;
+    bool is_leader = false;
 };
 
 class Group {
@@ -24,18 +34,15 @@ public:
     Group(const Group&) = delete;
     Group& operator=(const Group&) = delete;
 
-    // Returns the leader job_id if this caller is the leader, empty if following
-    std::optional<std::string> enter(const std::string& key);
-    
-    // Called by the leader when done
-    void done(const std::string& key, const std::string& leaderJobId);
-    
-    // Wait for the leader to finish
-    std::optional<std::string> waitFor(const std::string& key, const std::string& followerJobId);
+    Membership join(const std::string& key);
+    void succeed(const std::string& key, const std::shared_ptr<Flight>& flight);
+    void fail(const std::string& key, const std::shared_ptr<Flight>& flight, int errorCode,
+              std::string error);
+    void wait(const std::shared_ptr<Flight>& flight);
 
 private:
-    mutable std::shared_mutex mutex_;
-    std::map<std::string, InFlight> inflight_;
+    std::mutex mu_;
+    std::map<std::string, std::shared_ptr<Flight>> inflight_;
 };
 
 } // namespace yt::singleflight

@@ -7,6 +7,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <thread>
 
 namespace {
 
@@ -34,6 +35,9 @@ protected:
 
     void TearDown() override {
         unsetenv("YTCONV_FAKE_LOG_DIR");
+        unsetenv("YTCONV_FAKE_SLEEP");
+        unsetenv("YTCONV_FAKE_EXT");
+        yt::converter::setFreeSpaceBytesForTests(std::nullopt);
         yt::process::resetShutdownForTests();
     }
 
@@ -76,8 +80,8 @@ TEST_F(ConverterTest, Mp4UsesVideoFormatSelector) {
     const std::string ytdlpArgv = readFile(output_ / "yt-dlp.argv");
     EXPECT_NE(ytdlpArgv.find("bestvideo"), std::string::npos);
     EXPECT_NE(ytdlpArgv.find("--merge-output-format"), std::string::npos);
+    EXPECT_FALSE(std::filesystem::exists(output_ / "ffmpeg.argv"));
     EXPECT_NE(ytdlpArgv.find("--concurrent-fragments"), std::string::npos) << "Missing --concurrent-fragments in argv";
-    EXPECT_NE(ytdlpArgv.find("--fragment-retries"), std::string::npos) << "Missing --fragment-retries in argv";
     EXPECT_NE(ytdlpArgv.find("--fragment-retries"), std::string::npos) << "Missing --fragment-retries in argv";
     EXPECT_NE(ytdlpArgv.find("--cache-dir"), std::string::npos) << "Missing --cache-dir in argv";
     EXPECT_TRUE(result.convert_ms == 0u || result.convert_ms > 0);
@@ -111,9 +115,8 @@ TEST_F(ConverterTest, FailedFfmpegCleansTempAndOutput) {
             }
         },
         yt::Error);
-    EXPECT_TRUE(std::filesystem::is_empty(output_ / "jobs") ||
-                !std::filesystem::exists(output_ / "dQw4w9WgXcQ.mp3"));
     EXPECT_FALSE(std::filesystem::exists(output_ / "dQw4w9WgXcQ.mp3"));
+    EXPECT_FALSE(std::filesystem::exists(output_.string() + "/dQw4w9WgXcQ.mp3.partial"));
 }
 
 TEST_F(ConverterTest, TimeoutIsClassified) {
@@ -170,6 +173,111 @@ TEST_F(ConverterTest, Mp4IncludesFragmentConcurrencyFlags) {
     EXPECT_NE(ytdlpArgv.find("10"), std::string::npos) << "Missing retry count 10 in argv";
     EXPECT_NE(ytdlpArgv.find("--retry-sleep"), std::string::npos) << "Missing --retry-sleep in argv";
     EXPECT_NE(ytdlpArgv.find("--cache-dir"), std::string::npos) << "Missing --cache-dir in argv";
+}
+
+int countLines(const std::filesystem::path& path) {
+    if (!std::filesystem::exists(path)) {
+        return 0;
+    }
+    int count = 0;
+    for (char ch : readFile(path)) {
+        if (ch == '\n') {
+            ++count;
+        }
+    }
+    return count;
+}
+
+TEST_F(ConverterTest, ParallelMp3SharesOneDownload) {
+    setenv("YTCONV_FAKE_SLEEP", "0.4", 1);
+    yt::converter::ConversionRequest request;
+    request.url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+    request.format = "mp3";
+    request.config = testConfig(output_, fakePath("yt-dlp"), fakePath("ffmpeg"));
+    std::thread first([&] { yt::converter::processVideo(request); });
+    std::thread second([&] { yt::converter::processVideo(request); });
+    first.join();
+    second.join();
+    EXPECT_EQ(countLines(output_ / "yt-dlp.count"), 1);
+    EXPECT_EQ(countLines(output_ / "ffmpeg.count"), 1);
+}
+
+TEST_F(ConverterTest, Mp3ThenWavSharesSourceCache) {
+    yt::converter::ConversionRequest mp3;
+    mp3.url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+    mp3.format = "mp3";
+    mp3.config = testConfig(output_, fakePath("yt-dlp"), fakePath("ffmpeg"));
+    yt::converter::processVideo(mp3);
+    yt::converter::ConversionRequest wav = mp3;
+    wav.format = "wav";
+    yt::converter::processVideo(wav);
+    EXPECT_EQ(countLines(output_ / "yt-dlp.count"), 1);
+    EXPECT_EQ(countLines(output_ / "ffmpeg.count"), 2);
+}
+
+TEST_F(ConverterTest, DiskFullDoesNotSpawnDownloader) {
+    yt::converter::setFreeSpaceBytesForTests(1024);
+    yt::converter::ConversionRequest request;
+    request.url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+    request.format = "mp3";
+    request.config = testConfig(output_, fakePath("yt-dlp"), fakePath("ffmpeg"));
+    request.config.max_filesize = "500M";
+    request.config.max_filesize_bytes = 500LL * 1024 * 1024;
+    EXPECT_THROW(
+        {
+            try {
+                yt::converter::processVideo(request);
+            } catch (const yt::Error& error) {
+                EXPECT_EQ(error.code(), yt::ErrorCode::DiskFull);
+                throw;
+            }
+        },
+        yt::Error);
+    EXPECT_FALSE(std::filesystem::exists(output_ / "yt-dlp.count"));
+}
+
+TEST_F(ConverterTest, WebmStillRemuxesWithFfmpeg) {
+    setenv("YTCONV_FAKE_EXT", "webm", 1);
+    yt::converter::ConversionRequest request;
+    request.url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+    request.format = "mp4";
+    request.config = testConfig(output_, fakePath("yt-dlp"), fakePath("ffmpeg"));
+    yt::converter::processVideo(request);
+    const std::string ffmpegArgv = readFile(output_ / "ffmpeg.argv");
+    EXPECT_NE(ffmpegArgv.find("copy"), std::string::npos);
+}
+
+TEST_F(ConverterTest, RefreshBypassesSourceCache) {
+    yt::converter::ConversionRequest mp3;
+    mp3.url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+    mp3.format = "mp3";
+    mp3.config = testConfig(output_, fakePath("yt-dlp"), fakePath("ffmpeg"));
+    yt::converter::processVideo(mp3);
+    yt::converter::ConversionRequest wav = mp3;
+    wav.format = "wav";
+    wav.refresh = true;
+    yt::converter::processVideo(wav);
+    EXPECT_EQ(countLines(output_ / "yt-dlp.count"), 2);
+    EXPECT_EQ(countLines(output_ / "ffmpeg.count"), 2);
+}
+
+TEST_F(ConverterTest, SourceCacheEvictsOldest) {
+    yt::converter::ConversionRequest first;
+    first.url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+    first.format = "mp3";
+    first.config = testConfig(output_, fakePath("yt-dlp"), fakePath("ffmpeg"));
+    first.config.source_cache_max_bytes = 4;
+    yt::converter::processVideo(first);
+
+    yt::converter::ConversionRequest second;
+    second.url = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
+    second.format = "mp3";
+    second.config = first.config;
+    yt::converter::processVideo(second);
+
+    const auto cache = output_ / "cache" / "src";
+    EXPECT_FALSE(std::filesystem::exists(cache / "dQw4w9WgXcQ" / "audio" / "source.mp4"));
+    EXPECT_TRUE(std::filesystem::exists(cache / "jNQXAC9IVRw" / "audio" / "source.mp4"));
 }
 
 TEST_F(ConverterTest, OutputFilenameNeverContainsTraversal) {

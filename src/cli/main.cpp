@@ -32,6 +32,7 @@ void printUsage(const char* programName, bool unicode) {
               << "  -f, --format FMT    Output format\n"
               << "      --quality N     Max video height for mp4 (default: 1080)\n"
               << "      --force         Replace an existing output file\n"
+              << "      --refresh       Ignore the source cache and download again\n"
               << "      --no-unicode    Use ASCII status markers\n"
               << "  -v, --verbose       Debug logging\n"
               << "  -q, --quiet         Log errors only\n\n"
@@ -50,6 +51,7 @@ int main(int argc, char* argv[]) {
     yt::Config config = yt::loadConfigFromEnv();
     std::vector<std::string> positionals;
     std::string formatOverride;
+    bool refresh = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -82,6 +84,8 @@ int main(int argc, char* argv[]) {
             }
         } else if (arg == "--force") {
             config.force = true;
+        } else if (arg == "--refresh") {
+            refresh = true;
         } else if (arg == "--no-unicode") {
             config.no_unicode = true;
         } else if (arg == "--verbose" || arg == "-v") {
@@ -134,6 +138,7 @@ int main(int argc, char* argv[]) {
         request.format = format;
         request.config = config;
         request.show_progress = config.log_level != "ERROR";
+        request.refresh = refresh;
         const auto result = yt::converter::processVideo(request);
 
         const char* okMark = config.no_unicode ? "OK" : "\xE2\x9C\x93";

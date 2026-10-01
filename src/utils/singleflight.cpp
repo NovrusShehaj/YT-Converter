@@ -2,37 +2,45 @@
 
 namespace yt::singleflight {
 
-std::optional<std::string> Group::enter(const std::string& key) {
-    std::unique_lock<std::shared_mutex> lock(mutex_);
-    auto& entry = inflight_[key];
-    if (entry.done) {
-        return std::nullopt;
-    }
-    if (entry.result.has_value()) {
-        return std::nullopt; // Following
-    }
-    std::string leaderJobId = ""; // Would be set by caller
-    entry.result = leaderJobId;
-    return leaderJobId;
-}
-
-void Group::done(const std::string& key, const std::string& leaderJobId) {
-    std::unique_lock<std::shared_mutex> lock(mutex_);
-    auto it = inflight_.find(key);
+Membership Group::join(const std::string& key) {
+    std::lock_guard<std::mutex> lock(mu_);
+    const auto it = inflight_.find(key);
     if (it != inflight_.end()) {
-        it->second.done = true;
-        it->second.result = leaderJobId;
-        it->second.cv.notify_all();
+        return Membership{it->second, false};
     }
+    auto flight = std::make_shared<Flight>();
+    inflight_.emplace(key, flight);
+    return Membership{flight, true};
 }
 
-std::optional<std::string> Group::waitFor(const std::string& key, const std::string& followerJobId) {
-    std::unique_lock<std::mutex> lock(inflight_[key].mutex);
-    inflight_[key].cv.wait(lock, [&] { return inflight_[key].done; });
-    if (inflight_[key].error.empty()) {
-        return inflight_[key].result;
+void Group::succeed(const std::string& key, const std::shared_ptr<Flight>& flight) {
+    {
+        std::lock_guard<std::mutex> lock(flight->mu);
+        flight->ok = true;
+        flight->done = true;
     }
-    return std::nullopt;
+    flight->cv.notify_all();
+    std::lock_guard<std::mutex> lock(mu_);
+    inflight_.erase(key);
+}
+
+void Group::fail(const std::string& key, const std::shared_ptr<Flight>& flight, int errorCode,
+                 std::string error) {
+    {
+        std::lock_guard<std::mutex> lock(flight->mu);
+        flight->ok = false;
+        flight->error_code = errorCode;
+        flight->error = std::move(error);
+        flight->done = true;
+    }
+    flight->cv.notify_all();
+    std::lock_guard<std::mutex> lock(mu_);
+    inflight_.erase(key);
+}
+
+void Group::wait(const std::shared_ptr<Flight>& flight) {
+    std::unique_lock<std::mutex> lock(flight->mu);
+    flight->cv.wait(lock, [&flight] { return flight->done; });
 }
 
 } // namespace yt::singleflight

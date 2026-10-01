@@ -61,12 +61,12 @@ TEST(Process, LargeStdoutCompletesWithoutTimeout) {
         in << "#!/bin/bash\n" << "printf '%s' '" << megabyte << "'\n";
     }
     std::filesystem::permissions(script, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
-    const auto result = yt::process::run({script.string()}, {
-        .timeout_ms = 5000,
-        .capture_stdout = true,
-        .capture_stderr = false,
-        .max_output_bytes = 1024 * 1024 + 16,
-    });
+    yt::process::RunOptions options;
+    options.timeout_ms = 5000;
+    options.capture_stdout = true;
+    options.capture_stderr = false;
+    options.max_output_bytes = 1024 * 1024 + 16;
+    const auto result = yt::process::run({script.string()}, options);
     EXPECT_EQ(result.exit_code, 0);
     EXPECT_FALSE(result.timed_out);
     EXPECT_GE(result.stdout_text.size(), 1024 * 1024u);

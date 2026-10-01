@@ -1,5 +1,6 @@
 #include "dependencies.h"
 #include "error.h"
+#include "metrics.h"
 #include "process.h"
 
 #include <algorithm>
@@ -74,21 +75,34 @@ static std::mutex g_readyCacheMutex;
 static std::atomic<std::int64_t> g_readyCacheTime{0};
 static PreflightResult g_readyCache;
 
-PreflightResult checkToolsCached(const Config& config, int ttl_sec) {
+PreflightResult checkToolsCached(const Config& config) {
     const auto now = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-    
+                         std::chrono::steady_clock::now().time_since_epoch())
+                         .count();
+    const int ttl = std::max(0, config.ready_ttl_sec);
+
     std::lock_guard<std::mutex> lock(g_readyCacheMutex);
-    if (g_readyCache.ok && (now - g_readyCacheTime.load()) < ttl_sec) {
+    if (g_readyCache.ok && ttl > 0 && (now - g_readyCacheTime.load()) < ttl) {
+        yt::metrics::recordReadyCheck(false);
         return g_readyCache;
     }
-    
+
+    yt::metrics::recordReadyCheck(true);
     PreflightResult result = checkTools(config);
     if (result.ok) {
         g_readyCache = result;
         g_readyCacheTime.store(now);
+    } else {
+        g_readyCache = PreflightResult{};
+        g_readyCacheTime.store(0);
     }
     return result;
+}
+
+void clearReadyCacheForTests() {
+    std::lock_guard<std::mutex> lock(g_readyCacheMutex);
+    g_readyCache = PreflightResult{};
+    g_readyCacheTime.store(0);
 }
 
 } // namespace yt::deps

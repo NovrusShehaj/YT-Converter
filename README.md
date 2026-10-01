@@ -152,7 +152,9 @@ The response is JSON with an absolute `output_path`. Bytes are not streamed. The
 | GET | `/v1/metrics` | Loopback only |
 | GET | `/` | 404 |
 
-If `YTCONV_API_KEY` is set, send `X-Api-Key`. HTTP codes actually produced: 200, 400, 401, 404, 405, 500, 503, 504, 507.
+If `YTCONV_API_KEY` is set, send `X-Api-Key`. HTTP codes actually produced: 200, 202, 400, 401, 404, 405, 409, 500, 503, 504, 507.
+
+`YTCONV_SYNC_CONVERSIONS=1` keeps the old blocking `200` response. Leave it unset so `POST` returns `202` and the work runs on the queue. `GET /v1/healthz` is the high-frequency probe. `GET /v1/readyz` checks tools at most once per `YTCONV_READY_TTL_SEC` (default 60).
 
 See [docs/API.md](docs/API.md).
 
@@ -167,7 +169,7 @@ Environment variables (see `.env.example`; `.env` files are not loaded automatic
 | `YTCONV_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
 | `YTCONV_LOG_FORMAT` | `text` | `text` or `json` |
 | `YTCONV_OUTPUT_DIR` | `./output` | Media root |
-| `YTCONV_MAX_CONCURRENT` | `1` | Worker threads (also sets queue workers) |
+| `YTCONV_MAX_CONCURRENT` | `2` | Worker threads |
 | `YTCONV_QUEUE_DEPTH` | `8` | Max queued jobs |
 | `YTCONV_CHILD_TIMEOUT_SEC` | `900` | Legacy; use `YTCONV_DOWNLOAD_TIMEOUT_SEC` and `YTCONV_CONVERT_TIMEOUT_SEC` |
 | `YTCONV_DOWNLOAD_TIMEOUT_SEC` | `600` | yt-dlp timeout |
@@ -175,6 +177,7 @@ Environment variables (see `.env.example`; `.env` files are not loaded automatic
 | `YTCONV_CONCURRENT_FRAGMENTS` | `4` | yt-dlp fragment concurrency |
 | `YTCONV_FRAGMENT_RETRIES` | `10` | yt-dlp fragment retries |
 | `YTCONV_READY_TTL_SEC` | `60` | Readiness probe cache TTL |
+| `YTCONV_CACHE_DIR` | `<output>/cache/ytdlp` | yt-dlp metadata cache. A relative path is under the output root |
 | `YTCONV_YT_DLP` / `YTCONV_FFMPEG` | `yt-dlp` / `ffmpeg` | Binary paths (tests use fakes) |
 | `YTCONV_API_KEY` | empty | Required for remote bind |
 | `YTCONV_ALLOW_REMOTE` | unset | Must be `1` to bind all interfaces |

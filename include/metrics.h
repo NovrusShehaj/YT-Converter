@@ -17,6 +17,8 @@ struct Counters {
     std::atomic<std::uint64_t> convert_ms_total{0};
     std::atomic<std::uint64_t> queue_ms_total{0};
     std::atomic<std::uint64_t> bytes_downloaded{0};
+    std::atomic<std::uint64_t> ready_checks{0};
+    std::atomic<std::uint64_t> ready_spawns{0};
 };
 
 Counters& global();
@@ -30,6 +32,8 @@ void logSnapshot();
 void recordDownloadMs(std::uint64_t ms);
 void recordConvertMs(std::uint64_t ms);
 void recordBytesDownloaded(std::uint64_t bytes);
+void recordQueueMs(std::uint64_t ms);
+void recordReadyCheck(bool spawned);
 
 } // namespace yt::metrics
 

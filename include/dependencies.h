@@ -17,7 +17,8 @@ struct PreflightResult {
 PreflightResult checkTools(const Config& config);
 void requireTools(const Config& config);
 std::string installHint();
-PreflightResult checkToolsCached(const Config& config, int ttl_sec);
+PreflightResult checkToolsCached(const Config& config);
+void clearReadyCacheForTests();
 
 } // namespace yt::deps
 

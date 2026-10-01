@@ -2,25 +2,57 @@
 #define YT_CONVERTER_JOB_QUEUE_H
 
 #include "converter.h"
-#include "error.h"
 
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <functional>
+#include <cstdint>
+#include <deque>
 #include <map>
+#include <memory>
 #include <mutex>
-#include <queue>
+#include <optional>
+#include <string>
 #include <thread>
 #include <vector>
 
 namespace yt::jobs {
 
-struct QueuedJob {
+enum class JobState {
+    Queued,
+    Running,
+    Succeeded,
+    Failed,
+    Canceled
+};
+
+struct JobSnapshot {
     std::string job_id;
     std::string video_id;
-    converter::ConversionRequest request;
-    std::chrono::steady_clock::time_point queued_at;
+    std::string format;
+    std::string request_id;
+    JobState state = JobState::Queued;
+    std::string stage;
+    int percent = -1;
+    std::string output_path;
+    std::string error_code = "ok";
+    std::string message;
+    bool reused = false;
+    std::uint64_t download_ms = 0;
+    std::uint64_t convert_ms = 0;
+    std::uint64_t bytes = 0;
+    std::uint64_t queue_ms = 0;
+};
+
+enum class SubmitKind {
+    Queued,
+    Attached,
+    Full
+};
+
+struct SubmitResult {
+    SubmitKind kind = SubmitKind::Full;
+    JobSnapshot snapshot;
 };
 
 class Queue {
@@ -29,41 +61,43 @@ public:
     Queue(const Queue&) = delete;
     Queue& operator=(const Queue&) = delete;
 
-    void setWorkerCount(int count);
-    void setQueueDepth(int depth);
-
-    void start();
+    void start(int workers, int depth);
     void stop();
 
-    void enqueue(QueuedJob job);
-    QueuedJob dequeue();
-
-    void registerJob(const std::string& job_id, QueuedJob job);
-    QueuedJob* findJob(const std::string& job_id);
-    void removeJob(const std::string& job_id);
-
-    void cancelJob(const std::string& job_id);
-
-    bool empty() const;
-    std::size_t size() const;
-    std::size_t capacity() const;
+    SubmitResult submit(converter::ConversionRequest request, const std::string& videoId,
+                        const std::string& jobId);
+    std::optional<JobSnapshot> find(const std::string& jobId) const;
+    // 0 missing, 1 canceled, 2 already finished
+    int cancel(const std::string& jobId);
 
 private:
-    void workerLoop(int workerIndex);
-    bool tryEnqueue(QueuedJob job);
-    void signalEnqueue();
+    struct Record {
+        JobSnapshot snapshot;
+        std::string leader_id;
+        std::string coalesce_key;
+        converter::ConversionRequest request;
+        std::chrono::steady_clock::time_point queued_at = std::chrono::steady_clock::now();
+        std::shared_ptr<std::atomic<bool>> cancel = std::make_shared<std::atomic<bool>>(false);
+        bool counted = false;
+    };
 
-    std::mutex mutex_;
+    void workerLoop(int workerIndex);
+    JobSnapshot copySnapshot(const Record& record) const;
+    void clearActiveLocked(const Record& record);
+
+    mutable std::mutex mutex_;
     std::condition_variable cv_;
-    std::condition_variable enqueueCv_;
-    std::queue<QueuedJob> queue_;
+    std::deque<std::string> waiting_;
+    std::map<std::string, std::shared_ptr<Record>> jobs_;
+    std::map<std::string, std::string> activeByKey_;
     std::size_t capacity_ = 8;
+    int running_ = 0;
     int workerCount_ = 1;
     std::vector<std::thread> workers_;
-    std::atomic<bool> running_{false};
-    std::map<std::string, QueuedJob> jobMap_;
-    std::mutex jobMapMutex_;
+    bool started_ = false;
 };
+
+std::string jobStateString(JobState state);
 
 } // namespace yt::jobs
 

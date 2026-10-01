@@ -1,6 +1,7 @@
 #ifndef YT_CONVERTER_CONFIG_H
 #define YT_CONVERTER_CONFIG_H
 
+#include <cstdint>
 #include <string>
 
 namespace yt {
@@ -11,7 +12,8 @@ struct Config {
     std::string log_level = "INFO";
     std::string log_format = "text";
     std::string output_dir = "./output";
-    int max_concurrent = 1;
+    int max_concurrent = 2;
+    int queue_depth = 8;
     int child_timeout_sec = 900;
     int download_timeout_sec = 600;
     int convert_timeout_sec = 300;
@@ -22,7 +24,11 @@ struct Config {
     int concurrent_fragments = 4;
     int fragment_retries = 10;
     int max_height = 1080;
-    std::string cache_dir = ".yt-dlp-cache";
+    std::string cache_dir;
+    int ready_ttl_sec = 60;
+    int source_cache_ttl_sec = 86400;
+    std::int64_t source_cache_max_bytes = 10LL * 1024 * 1024 * 1024;
+    bool sync_conversions = false;
     std::string yt_dlp_path = "yt-dlp";
     std::string ffmpeg_path = "ffmpeg";
     std::string api_key;

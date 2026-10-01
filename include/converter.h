@@ -3,7 +3,11 @@
 
 #include "config.h"
 
+#include <atomic>
 #include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <string>
 
 namespace yt::converter {
@@ -15,6 +19,9 @@ struct ConversionRequest {
     std::string request_id;
     std::string job_id;
     bool show_progress = false;
+    bool refresh = false;
+    std::function<void(const std::string& stage, int percent)> on_progress;
+    std::shared_ptr<std::atomic<bool>> cancel;
 };
 
 struct ConversionResult {
@@ -30,6 +37,7 @@ struct ConversionResult {
 ConversionResult processVideo(const ConversionRequest& request);
 ConversionResult processVideo(const std::string& url, const std::string& format);
 std::string getOutputFilename(const std::string& videoID, const std::string& format);
+void setFreeSpaceBytesForTests(std::optional<std::uintmax_t> bytes);
 
 } // namespace yt::converter
 

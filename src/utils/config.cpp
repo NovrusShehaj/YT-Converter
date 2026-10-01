@@ -127,6 +127,11 @@ Config loadConfigFromEnv() {
     config.log_format = trimCopy(envOr("YTCONV_LOG_FORMAT", config.log_format));
     config.output_dir = trimCopy(envOr("YTCONV_OUTPUT_DIR", config.output_dir));
     config.max_concurrent = envInt("YTCONV_MAX_CONCURRENT", config.max_concurrent, 1, 32);
+    config.queue_depth = envInt("YTCONV_QUEUE_DEPTH", config.queue_depth, 1, 256);
+    config.ready_ttl_sec = envInt("YTCONV_READY_TTL_SEC", config.ready_ttl_sec, 0, 86400);
+    config.source_cache_ttl_sec =
+        envInt("YTCONV_SOURCE_CACHE_TTL_SEC", config.source_cache_ttl_sec, 0, 86400 * 30);
+    config.sync_conversions = envFlag("YTCONV_SYNC_CONVERSIONS");
     config.child_timeout_sec =
         envInt("YTCONV_CHILD_TIMEOUT_SEC", config.child_timeout_sec, 1, 86400);
     config.download_timeout_sec =
@@ -148,6 +153,10 @@ Config loadConfigFromEnv() {
         envInt("YTCONV_FRAGMENT_RETRIES", config.fragment_retries, 0, 100);
     config.max_height = envInt("YTCONV_MAX_HEIGHT", config.max_height, 144, 4320);
     config.cache_dir = trimCopy(envOr("YTCONV_CACHE_DIR", config.cache_dir));
+    const std::string cacheMax = trimCopy(envOr("YTCONV_SOURCE_CACHE_MAX_BYTES", ""));
+    if (!cacheMax.empty()) {
+        config.source_cache_max_bytes = parseHumanSize(cacheMax);
+    }
     config.yt_dlp_path = trimCopy(envOr("YTCONV_YT_DLP", config.yt_dlp_path));
     config.ffmpeg_path = trimCopy(envOr("YTCONV_FFMPEG", config.ffmpeg_path));
     config.api_key = envOr("YTCONV_API_KEY", "");

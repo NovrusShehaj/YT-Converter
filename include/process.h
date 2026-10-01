@@ -1,7 +1,9 @@
 #ifndef YT_CONVERTER_PROCESS_H
 #define YT_CONVERTER_PROCESS_H
 
+#include <atomic>
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -16,6 +18,7 @@ struct RunOptions {
     using LineCallback = void (*)(const std::string& line, void* user);
     LineCallback on_line = nullptr;
     void* on_line_user = nullptr;
+    std::shared_ptr<std::atomic<bool>> cancel;
 };
 
 struct RunResult {

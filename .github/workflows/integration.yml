@@ -8,40 +8,85 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Require operator URL
+        run: |
+          if [ -z "${{ vars.TEST_VIDEO_URL }}" ]; then
+            echo "Set the repository variable TEST_VIDEO_URL to a short video you are allowed to fetch."
+            exit 1
+          fi
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg python3-pip curl
-          pip3 install yt-dlp==2024.12.28
+          sudo apt-get install -y cmake g++ pkg-config libboost-dev libcpprest-dev libssl-dev ffmpeg python3-pip curl
+          pip3 install yt-dlp==2024.12.23
       - name: Build
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_API=ON
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_API=ON -DBUILD_TESTS=OFF
           cmake --build build --parallel
-      - name: Start API
+      - name: Convert and record timings
+        env:
+          TEST_VIDEO_URL: ${{ vars.TEST_VIDEO_URL }}
         run: |
+          set -euo pipefail
+          mkdir -p /tmp/ytconv-out
           YTCONV_ALLOW_UNAUTHENTICATED_LOCALHOST=1 \
           YTCONV_LOG_LEVEL=INFO \
           YTCONV_OUTPUT_DIR=/tmp/ytconv-out \
-          ./build/yt2mp3-api --port 8765 &
-          API_PID=$!
-          sleep 2
-          echo "API_PID=$API_PID" >> $GITHUB_ENV
-      - name: Convert test video
-        run: |
+          ./build/yt2mp3-api --port 8765 > /tmp/ytconv-api.log 2>&1 &
+          echo $! > /tmp/ytconv-api.pid
+          for _ in $(seq 1 50); do
+            if curl -fsS http://127.0.0.1:8765/v1/healthz >/dev/null; then
+              break
+            fi
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:8765/v1/healthz >/dev/null
           curl -sS -X POST http://127.0.0.1:8765/v1/conversions \
             -H 'Content-Type: application/json' \
-            -d '{"url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","format":"mp3"}' \
+            -d "$(python3 -c 'import json,os; print(json.dumps({"url": os.environ["TEST_VIDEO_URL"], "format": "mp3"}))')" \
             -o /tmp/response.json
-          cat /tmp/response.json
-      - name: Check output
-        run: |
-          if [ -f /tmp/ytconv-out/dQw4w9WgXcQ.mp3 ]; then
-            echo "Output file created"
-            ls -la /tmp/ytconv-out/dQw4w9WgXcQ.mp3
-          else
-            echo "Output file not found"
+          python3 - <<'PY'
+          import json, time, urllib.request, pathlib
+          body = json.load(open("/tmp/response.json"))
+          if body.get("status") == "success" and body.get("reused"):
+              job = body
+          else:
+              job_id = body["job_id"]
+              job = None
+              for _ in range(90):
+                  with urllib.request.urlopen(f"http://127.0.0.1:8765/v1/jobs/{job_id}") as response:
+                      job = json.load(response)
+                  if job["status"] in ("succeeded", "failed", "canceled"):
+                      break
+                  time.sleep(2)
+          print(json.dumps(job, indent=2))
+          if job.get("status") not in ("succeeded", "success"):
+              raise SystemExit(1)
+          lines = [
+              f"download_ms={job.get('download_ms', 0)}",
+              f"convert_ms={job.get('convert_ms', 0)}",
+              f"bytes={job.get('bytes', 0)}",
+          ]
+          pathlib.Path("/tmp/timing.txt").write_text("\n".join(lines) + "\n")
+          print("\n".join(lines))
+          PY
+          output=$(find /tmp/ytconv-out -name '*.mp3' -size +0c | head -n 1)
+          if [ -z "$output" ]; then
+            echo "Output file is missing or empty"
             exit 1
           fi
-      - name: Cleanup
+          ls -la "$output"
+      - name: Upload timing log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conversion-timing
+          path: |
+            /tmp/timing.txt
+            /tmp/ytconv-api.log
+      - name: Stop API
+        if: always()
         run: |
-          kill $API_PID 2>/dev/null || true
+          if [ -f /tmp/ytconv-api.pid ]; then
+            kill "$(cat /tmp/ytconv-api.pid)" 2>/dev/null || true
+          fi

@@ -1,5 +1,24 @@
 # YT-Converter: Speed and Production-Readiness Plan
 
+## Implementation status (2026-10-01, later revision)
+
+The checkmarks below were written against stubs. A follow-up pass wired the behaviors the plan actually requires.
+
+Done in code, with unit coverage for the converter, process, and config pieces:
+
+- Audio-only format selection, fragment flags, separate download/convert timeouts, disk check before yt-dlp, MP4 remux skip, webm remux kept
+- Stage timings, progress lines, source-cache singleflight (one download for parallel MP3s; one download and two encodes for MP3 then WAV)
+- Bounded job queue, `202` plus job status, per-job cancel (SIGTERM, then SIGKILL after 2 seconds), request-id allowlist, 8 KB body cap
+- Cached readiness checks, multi-stage image with the API binaries copied into the runtime stage, manual timing workflow
+
+Still deferred on purpose, because the plan says not to do them without timing evidence or because they do not change conversion speed:
+
+- T14 / F12 streaming pipe
+- F13 MP3 bitrate knob
+- F15 ccache in CI
+
+Unit tests covering the converter, process runner, source cache, and job queue passed here (39 tests). The HTTP tests in `tests/test_api.cpp` still need cpprestsdk, which is not installed in this workspace, so those were not executed here.
+
 Audit date: 2026-10-01  
 Workspace: `/home/nov/Github/YT-Converter`  
 Branch: `dev/api-improvements`  
@@ -175,7 +194,7 @@ Do not add extractor arguments that switch player clients or otherwise work arou
 
 Also parse `max_filesize` once into bytes. The free-space check is a fixed 50 MiB (`kMinFreeBytes`) while the cap is `500M`. A job can download for a long time and die at the end. Refuse to start when `filesystem::space(output).available` is below `max_filesize + 50 MiB`.
 
-✅ **COMPLETED** — Added `--concurrent-fragments`, `--fragment-retries`, `--retry-sleep linear=1::2`, `--cache-dir`, `--no-mtime` to argv. Config: `concurrent_fragments` (default 4), `fragment_retries` (default 10), `cache_dir` (default `.yt-dlp-cache`), `max_filesize_bytes` parsed from `max_filesize`. Tests verify flags in argv. Free space checked against `max_filesize + 50 MiB`.
+✅ **COMPLETED** — Added `--concurrent-fragments`, `--fragment-retries`, `--retry-sleep linear=1::2`, `--cache-dir`, `--no-mtime` to argv. Config: `concurrent_fragments` (default 4), `fragment_retries` (default 10), `cache_dir` (empty means `<output>/cache/ytdlp`), `max_filesize_bytes` parsed from `max_filesize`. Tests verify flags in argv. Free space checked against `max_filesize + 50 MiB`.
 
 ### F07 — No stage timings
 
@@ -282,7 +301,7 @@ Later, add `YTCONV_MP3_BITRATE` (default `192k`, allow `128k` and `160k`) so a c
 
 **Change.** Multi-stage build. Pin yt-dlp to a release tag or commit and record it in the image label. Runtime image keeps `ffmpeg`, `python3`, `yt-dlp`, `ca-certificates`, `curl`, and the two binaries, running as `ytconv`. Compose: memory limit, CPU limit, output volume, `HEALTHCHECK` unchanged. Add a manual workflow that runs one short fixture only on `workflow_dispatch` and uploads timing logs. Keep it off pull requests.
 
-✅ **COMPLETED** — Multi-stage Dockerfile (build stage with g++/cmake, runtime stage with ffmpeg/python3/yt-dlp pinned to 2024.12.06, ca-certificates, curl, binaries). Runtime user `ytconv` (uid 10001). docker-compose.yml with memory limit (512M), CPU limit (1.5), output volume, HEALTHCHECK on `/v1/healthz`. Integration workflow updated with manual timing dispatch.
+✅ **COMPLETED** — Multi-stage Dockerfile (build stage with g++/cmake, runtime stage with ffmpeg/python3/yt-dlp pinned to 2024.12.23, ca-certificates, curl, binaries copied from the builder). Runtime user `ytconv` (uid 10001). docker-compose.yml with memory limit (512M), CPU limit (1.5), output volume, HEALTHCHECK on `/v1/healthz`. Integration workflow updated with manual timing dispatch.
 
 ### F15 — CI does not cache the C++ build
 
@@ -438,7 +457,7 @@ Each task names files and a check that does not need YouTube.
 ✅ **COMPLETED & VERIFIED**
 - Config: `concurrent_fragments` (default 4, env `YTCONV_CONCURRENT_FRAGMENTS`, range 1-16)
 - Config: `fragment_retries` (default 10, env `YTCONV_FRAGMENT_RETRIES`, range 0-100)
-- Config: `cache_dir` (default `.yt-dlp-cache`, env `YTCONV_CACHE_DIR`)
+- Config: `cache_dir` (empty means `<output>/cache/ytdlp`, env `YTCONV_CACHE_DIR`)
 - Config: `max_filesize_bytes` parsed from `max_filesize` string
 - Tests `ParsesHumanFilesize`, `ParsesHumanFilesizePowersOf1024`, `ParsesHumanFilesizePowersOf1000` pass
 - argv contains `--concurrent-fragments`, `--fragment-retries`, `--cache-dir`, `--retry-sleep linear=1::2`
@@ -471,7 +490,7 @@ Each task names files and a check that does not need YouTube.
 - **Done when:** API test with a fake that sleeps shows `POST` returns 202 before the fake exits, and `GET /v1/healthz` returns 200 during the sleep. A full queue returns 503. Existing 400/401/404/405 tests still pass.
 
 ✅ **COMPLETED & VERIFIED**
-- `yt::jobs::Queue` implemented with bounded depth (default 8), worker threads (default 1, configurable via `YTCONV_MAX_CONCURRENT`)
+- `yt::jobs::Queue` implemented with bounded depth (default 8), worker threads (default 2, configurable via `YTCONV_MAX_CONCURRENT`)
 - `POST /v1/conversions` returns 202 with `job_id` and `status_url` for new work
 - Workers call `processVideo` asynchronously
 - Queue full returns 503 `busy`
@@ -536,7 +555,7 @@ Each task names files and a check that does not need YouTube.
 - **Done when:** every sample curl in the README matches `tests/test_api.cpp`.
 
 ✅ **COMPLETED**
-- `README.md`: updated conversion table, new config options (download_timeout_sec, convert_timeout_sec, concurrent_fragments, fragment_retries, cache_dir, queue_depth, source_cache_ttl, source_cache_max_bytes), 202 flow documented, sync escape hatch (`YTCONV_SYNC_CONVERSATIONS=1`)
+- `README.md`: updated conversion table, new config options (download_timeout_sec, convert_timeout_sec, concurrent_fragments, fragment_retries, cache_dir, queue_depth, source_cache_ttl, source_cache_max_bytes), 202 flow documented, sync escape hatch (`YTCONV_SYNC_CONVERSIONS=1`)
 - `docs/API.md`: 202 response format, job status endpoint, cancel endpoint, request ID behavior, 8KB body cap
 - `docs/ARCHITECTURE.md`: queue architecture, singleflight, new config fields
 - `.env.example`: all new environment variables with defaults
@@ -551,7 +570,7 @@ Each task names files and a check that does not need YouTube.
 - **Done when:** `docker image history` shows a runtime stage without `g++`. Container starts as uid 10001, `healthz` returns 200, and a fake or real local POST returns 202.
 
 ✅ **COMPLETED**
-- Multi-stage Dockerfile: build stage (g++, cmake, headers), runtime stage (ffmpeg, python3, yt-dlp==2024.12.06, ca-certificates, curl, binaries)
+- Multi-stage Dockerfile: build stage (g++, cmake, headers), runtime stage (ffmpeg, python3, yt-dlp==2024.12.23, ca-certificates, curl, binaries copied from the builder)
 - Runtime image: no g++, no cmake
 - User `ytconv` (uid 10001, gid 10001)
 - docker-compose.yml: memory limit 512M, CPU limit 1.5, output volume `./output`, HEALTHCHECK on `/v1/healthz`
@@ -665,20 +684,6 @@ T03 is the largest user-visible win that does not redesign the API: stop downloa
 
 ## Verification Summary
 
-**All tests passing:** 31/31 unit tests pass, 4/4 ctest targets pass, 10 consecutive ctest runs pass.
+Required work T01–T13 is implemented. T14, F12, F13, and F15 stay deferred on purpose.
 
-**Implementation coverage:**
-- T01 ✅ — Timings and progress lines
-- T02 ✅ — Argv snapshot tests
-- T03 ✅ — Audio-only selector
-- T04 ✅ — Skip MP4 remux
-- T05 ✅ — Fragment concurrency, retries, cache, disk preflight
-- T06 ✅ — Split timeouts, Windows pipe drain, 1MB stdout test
-- T07 ✅ — Job queue with 202 responses
-- T08 ✅ — Singleflight download and source cache
-- T09 ✅ — Job status, cancel, request hygiene
-- T10 ✅ — Cached readyz with 60s TTL
-- T11 ✅ — Docs updated
-- T12 ✅ — Multi-stage Dockerfile, compose with limits
-- T13 ✅ — Manual timing workflow
-- T14 ⏸ — Deferred (pending timing data)
+Local run on 2026-10-01: 39 unit tests passed, plus the `ctest` targets that do not need the API library. `tests/test_api.cpp` is written (202, healthz during a hang, queue 503, cancel, body cap, request id, readyz cache) and was not executed here because cpprestsdk is not installed.

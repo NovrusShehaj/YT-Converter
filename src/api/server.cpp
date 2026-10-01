@@ -15,10 +15,12 @@ void printServerInfo(const yt::Config& config, bool unauthenticated) {
     std::cout << "YouTube Converter API " << YTCONV_VERSION << '\n'
               << "Listening on http://" << config.bind << ':' << config.port << '\n'
               << "Endpoints:\n"
-              << "  POST /v1/conversions\n"
-              << "  GET  /v1/healthz\n"
-              << "  GET  /v1/readyz\n"
-              << "  GET  /v1/metrics   (loopback only)\n";
+              << "  POST   /v1/conversions\n"
+              << "  GET    /v1/jobs/{id}\n"
+              << "  DELETE /v1/jobs/{id}\n"
+              << "  GET    /v1/healthz\n"
+              << "  GET    /v1/readyz\n"
+              << "  GET    /v1/metrics   (loopback only)\n";
     if (unauthenticated) {
         std::cout << "Authentication: disabled (localhost only)\n";
     } else {
