@@ -129,6 +129,15 @@ Config loadConfigFromEnv() {
     config.output_dir = trimCopy(envOr("YTCONV_OUTPUT_DIR", config.output_dir));
     config.max_concurrent = envInt("YTCONV_MAX_CONCURRENT", config.max_concurrent, 1, 32);
     config.queue_depth = envInt("YTCONV_QUEUE_DEPTH", config.queue_depth, 1, 256);
+    config.max_active_jobs = envInt("YTCONV_MAX_ACTIVE_JOBS", config.max_active_jobs, 1, 65536);
+    config.job_history_max = envInt("YTCONV_JOB_HISTORY_MAX", config.job_history_max, 0, 100000);
+    config.job_history_ttl_sec =
+        envInt("YTCONV_JOB_HISTORY_TTL_SEC", config.job_history_ttl_sec, 1, 7 * 86400);
+    if (config.max_active_jobs < config.queue_depth) {
+        throw Error(ErrorCode::ConfigError,
+                    "YTCONV_MAX_ACTIVE_JOBS must be at least YTCONV_QUEUE_DEPTH, because every "
+                    "operation has at least one job");
+    }
     config.ready_ttl_sec = envInt("YTCONV_READY_TTL_SEC", config.ready_ttl_sec, 0, 86400);
     config.source_cache_ttl_sec =
         envInt("YTCONV_SOURCE_CACHE_TTL_SEC", config.source_cache_ttl_sec, 0, 86400 * 30);

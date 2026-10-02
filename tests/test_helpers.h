@@ -5,7 +5,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <random>
+#include <thread>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -68,6 +70,39 @@ inline int countPartialFiles(const std::filesystem::path& root) {
         }
     }
     return count;
+}
+
+// Polls a condition until it holds or the timeout passes. Used for barriers, not as a race guess.
+inline bool waitUntil(const std::function<bool()>& condition,
+                      std::chrono::milliseconds timeout = std::chrono::seconds(20)) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!condition()) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return true;
+}
+
+// PIDs of gated fakes that touched "started.<pid>" in a gate directory.
+inline std::vector<long> gateStartedPids(const std::filesystem::path& gate) {
+    std::vector<long> pids;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(gate, ec)) {
+        const std::string name = entry.path().filename().string();
+        if (name.rfind("started.", 0) == 0) {
+            try {
+                pids.push_back(std::stol(name.substr(8)));
+            } catch (const std::exception&) {
+            }
+        }
+    }
+    return pids;
+}
+
+inline void openGate(const std::filesystem::path& gate) {
+    writeFile(gate / "release", "");
 }
 
 #endif

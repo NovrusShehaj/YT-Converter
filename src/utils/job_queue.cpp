@@ -2,7 +2,7 @@
 #include "error.h"
 #include "logger.h"
 #include "metrics.h"
-#include "process.h"
+#include "source_cache.h"
 
 #include <algorithm>
 #include <utility>
@@ -10,8 +10,25 @@
 namespace yt::jobs {
 namespace {
 
-std::string coalesceKey(const std::string& videoId, const std::string& format) {
-    return videoId + "\n" + format;
+std::string truncateMessage(std::string message) {
+    if (message.size() > kMaxMessageBytes) {
+        message.resize(kMaxMessageBytes);
+    }
+    return message;
+}
+
+std::string coalesceKey(const converter::ConversionRequest& request, const std::string& videoId) {
+    std::string key = videoId + "\n" + request.format + "\n" + policyClass(request);
+    if (request.format == "mp4") {
+        key += "\n" + std::to_string(request.config.max_height);
+    }
+    return key;
+}
+
+std::uint64_t millisBetween(std::chrono::steady_clock::time_point from,
+                            std::chrono::steady_clock::time_point to) {
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(to - from).count();
+    return static_cast<std::uint64_t>(std::max<std::int64_t>(0, ms));
 }
 
 } // namespace
@@ -32,290 +49,425 @@ std::string jobStateString(JobState state) {
     return "failed";
 }
 
+std::string policyClass(const converter::ConversionRequest& request) {
+    if (request.refresh) {
+        return "refresh";
+    }
+    if (request.config.force || !request.config.reuse_completed) {
+        return "replace";
+    }
+    return "reuse";
+}
+
+Queue::~Queue() {
+    stop();
+}
+
 void Queue::start(int workers, int depth) {
+    Limits limits;
+    limits.workers = workers;
+    limits.max_operations = depth;
+    start(limits);
+}
+
+void Queue::start(const Limits& limits) {
     int count = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (started_) {
             return;
         }
-        workerCount_ = std::max(1, workers);
-        capacity_ = std::max<std::size_t>(1, static_cast<std::size_t>(depth));
+        limits_ = limits;
+        limits_.workers = std::max(1, limits.workers);
+        limits_.max_operations = std::max(1, limits.max_operations);
+        limits_.max_active_jobs = std::max(1, limits.max_active_jobs);
+        limits_.history_max = std::max(0, limits.history_max);
+        limits_.history_ttl_sec = std::max(1, limits.history_ttl_sec);
         started_ = true;
-        count = workerCount_;
+        stopping_ = false;
+        count = limits_.workers;
     }
     workers_.reserve(static_cast<std::size_t>(count));
     for (int i = 0; i < count; ++i) {
-        workers_.emplace_back(&Queue::workerLoop, this, i);
+        workers_.emplace_back(&Queue::workerLoop, this);
     }
 }
 
 void Queue::stop() {
+    std::vector<Notification> notifications;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        started_ = false;
-        for (const std::string& id : waiting_) {
-            const auto it = jobs_.find(id);
-            if (it != jobs_.end() && it->second) {
-                it->second->cancel->store(true);
-                it->second->snapshot.state = JobState::Canceled;
-                it->second->snapshot.error_code = "canceled";
-                it->second->snapshot.message = "Canceled";
-                activeByKey_.erase(it->second->coalesce_key);
+        if (!started_ || stopping_) {
+            return;
+        }
+        stopping_ = true;
+        for (auto& [id, job] : jobs_) {
+            if (!job.terminal) {
+                finalizeLocked(id, job, JobState::Canceled, nullptr, ErrorCode::Canceled,
+                               "Canceled: server shutting down", notifications);
             }
+        }
+        for (const auto& op : waiting_) {
+            op->cancel->store(true);
+            op->subscribers.clear();
         }
         waiting_.clear();
-        for (auto& entry : jobs_) {
-            if (entry.second) {
-                entry.second->cancel->store(true);
-            }
+        for (const auto& op : running_) {
+            op->cancel->store(true);
+            op->subscribers.clear();
         }
+        activeByKey_.clear();
     }
     cv_.notify_all();
-    yt::process::requestShutdown();
+    // Sync HTTP responses waiting on these jobs resolve before workers are joined.
+    notify(notifications);
     for (auto& worker : workers_) {
         if (worker.joinable()) {
             worker.join();
         }
     }
     workers_.clear();
-    yt::process::resetShutdownForTests();
+    std::lock_guard<std::mutex> lock(mutex_);
+    started_ = false;
+}
+
+void Queue::setClockForTests(Clock clock) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    clock_ = std::move(clock);
+}
+
+std::chrono::steady_clock::time_point Queue::now() const {
+    return clock_ ? clock_() : std::chrono::steady_clock::now();
 }
 
 SubmitResult Queue::submit(converter::ConversionRequest request, const std::string& videoId,
-                           const std::string& jobId) {
+                           const std::string& jobId, TerminalCallback onTerminal) {
     std::lock_guard<std::mutex> lock(mutex_);
     SubmitResult result;
-    const std::string key = coalesceKey(videoId, request.format);
-    if (!request.config.force && !request.refresh) {
-        const auto active = activeByKey_.find(key);
-        if (active != activeByKey_.end()) {
-            auto follower = std::make_shared<Record>();
-            follower->snapshot.job_id = jobId;
-            follower->snapshot.video_id = videoId;
-            follower->snapshot.format = request.format;
-            follower->snapshot.request_id = request.request_id;
-            follower->snapshot.state = JobState::Queued;
-            follower->snapshot.message = "Attached to in-flight conversion";
-            follower->leader_id = active->second;
-            follower->coalesce_key = key;
-            follower->request = std::move(request);
-            jobs_[jobId] = follower;
-            result.kind = SubmitKind::Attached;
-            result.snapshot = copySnapshot(*follower);
-            return result;
-        }
+    if (!started_ || stopping_) {
+        result.kind = SubmitKind::Stopping;
+        return result;
     }
-
-    const std::size_t unfinished =
-        waiting_.size() + static_cast<std::size_t>(std::max(0, running_));
-    if (unfinished >= capacity_) {
-        result.kind = SubmitKind::Full;
+    pruneLocked();
+    if (jobs_.count(jobId) != 0) {
+        // Never silently replace an existing (live or retained) record.
+        result.kind = SubmitKind::Duplicate;
+        return result;
+    }
+    // The subscription bound is checked before anything is allocated, attached or not.
+    if (liveJobs_ >= static_cast<std::size_t>(limits_.max_active_jobs)) {
+        result.kind = SubmitKind::Busy;
         return result;
     }
 
-    auto record = std::make_shared<Record>();
-    record->snapshot.job_id = jobId;
-    record->snapshot.video_id = videoId;
-    record->snapshot.format = request.format;
-    record->snapshot.request_id = request.request_id;
-    record->snapshot.state = JobState::Queued;
-    record->snapshot.message = "Queued";
-    record->coalesce_key = key;
-    record->request = std::move(request);
-    record->queued_at = std::chrono::steady_clock::now();
-    jobs_[jobId] = record;
-    activeByKey_[key] = jobId;
-    waiting_.push_back(jobId);
-    result.kind = SubmitKind::Queued;
-    result.snapshot = copySnapshot(*record);
-    cv_.notify_one();
+    const std::string key = coalesceKey(request, videoId);
+    const std::string format = request.format;
+    const std::string requestId = request.request_id;
+    std::shared_ptr<Operation> op;
+    const auto active = activeByKey_.find(key);
+    if (active != activeByKey_.end()) {
+        const auto& candidate = active->second;
+        // A refresh only shares an operation that has not started: its download will begin
+        // after this request was admitted.
+        if (!candidate->cancel->load() && (!candidate->refresh || !candidate->running)) {
+            op = candidate;
+        }
+    }
+
+    if (!op) {
+        if (waiting_.size() + running_.size() >= static_cast<std::size_t>(limits_.max_operations)) {
+            result.kind = SubmitKind::Full;
+            return result;
+        }
+        op = std::make_shared<Operation>();
+        op->key = key;
+        op->refresh = request.refresh;
+        if (request.admitted_at == 0) {
+            request.admitted_at = cache::nowStamp();
+        }
+        op->request = std::move(request);
+        waiting_.push_back(op);
+        activeByKey_[key] = op;
+        result.kind = SubmitKind::Queued;
+        cv_.notify_one();
+    } else {
+        result.kind = SubmitKind::Attached;
+    }
+
+    Job job;
+    job.snapshot.job_id = jobId;
+    job.snapshot.video_id = videoId;
+    job.snapshot.format = format;
+    job.snapshot.request_id = requestId;
+    job.snapshot.attached = result.kind == SubmitKind::Attached;
+    job.snapshot.message = job.snapshot.attached ? "Attached to in-flight conversion" : "Queued";
+    job.op = op;
+    job.on_terminal = std::move(onTerminal);
+    job.submitted_at = now();
+    op->subscribers.push_back(jobId);
+    ++liveJobs_;
+    auto& stored = jobs_[jobId];
+    stored = std::move(job);
+    result.snapshot = snapshotLocked(stored);
     return result;
 }
 
-std::optional<JobSnapshot> Queue::find(const std::string& jobId) const {
+std::optional<JobSnapshot> Queue::find(const std::string& jobId) {
     std::lock_guard<std::mutex> lock(mutex_);
+    pruneLocked();
     const auto it = jobs_.find(jobId);
-    if (it == jobs_.end() || !it->second) {
+    if (it == jobs_.end()) {
         return std::nullopt;
     }
-    return copySnapshot(*it->second);
+    return snapshotLocked(it->second);
 }
 
-int Queue::cancel(const std::string& jobId) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    const auto it = jobs_.find(jobId);
-    if (it == jobs_.end() || !it->second) {
-        return 0;
+CancelResult Queue::cancel(const std::string& jobId) {
+    std::vector<Notification> notifications;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        pruneLocked();
+        const auto it = jobs_.find(jobId);
+        if (it == jobs_.end()) {
+            return CancelResult::Missing;
+        }
+        Job& job = it->second;
+        if (job.terminal) {
+            return CancelResult::AlreadyFinished;
+        }
+        const std::shared_ptr<Operation> op = job.op;
+        finalizeLocked(jobId, job, JobState::Canceled, nullptr, ErrorCode::Canceled, "Canceled",
+                       notifications);
+        detachLocked(jobId, op);
     }
-    Record& record = *it->second;
-    std::shared_ptr<Record> target = it->second;
-    if (!record.leader_id.empty()) {
-        const auto leader = jobs_.find(record.leader_id);
-        if (leader != jobs_.end()) {
-            target = leader->second;
+    notify(notifications);
+    return CancelResult::Canceled;
+}
+
+Stats Queue::stats() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    Stats stats;
+    stats.live_jobs = liveJobs_;
+    stats.job_records = jobs_.size();
+    stats.terminal_jobs = jobs_.size() - liveJobs_;
+    stats.queued_operations = waiting_.size();
+    stats.running_operations = running_.size();
+    stats.active_keys = activeByKey_.size();
+    for (const auto& entry : jobs_) {
+        if (!entry.second.terminal && entry.second.op) {
+            if (entry.second.op->running) {
+                ++stats.running_jobs;
+            } else {
+                ++stats.queued_jobs;
+            }
         }
     }
-    if (!target) {
-        return 0;
-    }
-    if (target->snapshot.state == JobState::Succeeded ||
-        target->snapshot.state == JobState::Failed ||
-        target->snapshot.state == JobState::Canceled) {
-        return 2;
-    }
-    target->cancel->store(true);
-    target->snapshot.state = JobState::Canceled;
-    target->snapshot.error_code = "canceled";
-    target->snapshot.message = "Canceled";
-    clearActiveLocked(*target);
-    waiting_.erase(std::remove(waiting_.begin(), waiting_.end(), target->snapshot.job_id),
-                   waiting_.end());
-    return 1;
+    return stats;
 }
 
-void Queue::clearActiveLocked(const Record& record) {
-    const auto active = activeByKey_.find(record.coalesce_key);
-    if (active != activeByKey_.end() && active->second == record.snapshot.job_id) {
+// Removes one job's interest in its operation. The last subscriber leaving cancels the
+// operation: a queued one is dropped immediately (freeing its slot), a running one has its token
+// set and keeps its worker slot until its child has actually stopped.
+void Queue::detachLocked(const std::string& jobId, const std::shared_ptr<Operation>& op) {
+    if (!op) {
+        return;
+    }
+    auto& subscribers = op->subscribers;
+    subscribers.erase(std::remove(subscribers.begin(), subscribers.end(), jobId),
+                      subscribers.end());
+    if (!subscribers.empty()) {
+        return;
+    }
+    op->cancel->store(true);
+    releaseKeyLocked(op);
+    if (!op->running) {
+        waiting_.erase(std::remove(waiting_.begin(), waiting_.end(), op), waiting_.end());
+    }
+}
+
+// New submissions never attach to an operation that is finishing or being canceled; they start
+// a new operation instead. Only this operation's own mapping is removed.
+void Queue::releaseKeyLocked(const std::shared_ptr<Operation>& op) {
+    const auto active = activeByKey_.find(op->key);
+    if (active != activeByKey_.end() && active->second == op) {
         activeByKey_.erase(active);
     }
 }
 
-JobSnapshot Queue::copySnapshot(const Record& record) const {
-    if (record.leader_id.empty()) {
-        return record.snapshot;
+void Queue::finalizeLocked(const std::string& jobId, Job& job, JobState state,
+                           const converter::ConversionResult* result, ErrorCode code,
+                           const std::string& message, std::vector<Notification>& out) {
+    if (job.terminal) {
+        return; // terminal states are final
     }
-    const auto leader = jobs_.find(record.leader_id);
-    if (leader == jobs_.end() || !leader->second) {
-        return record.snapshot;
+    job.terminal = true;
+    job.terminal_at = now();
+    job.op.reset();
+    JobSnapshot& snapshot = job.snapshot;
+    snapshot.state = state;
+    snapshot.code = code;
+    snapshot.error_code = errorCodeString(code);
+    snapshot.message = truncateMessage(message);
+    if (state == JobState::Succeeded && result != nullptr) {
+        snapshot.stage = "done";
+        snapshot.percent = 100;
+        snapshot.output_path = result->output_path;
+        snapshot.reused = result->reused;
+        snapshot.download_ms = result->download_ms;
+        snapshot.convert_ms = result->convert_ms;
+        snapshot.bytes = result->source_bytes;
+        snapshot.source_bytes = result->source_bytes;
+        snapshot.output_bytes = result->output_bytes;
+        snapshot.shared_download = result->shared_download;
+        snapshot.source_cache_hit = result->source_cache_hit;
     }
-    JobSnapshot snapshot = leader->second->snapshot;
-    snapshot.job_id = record.snapshot.job_id;
-    snapshot.request_id = record.snapshot.request_id;
+    --liveJobs_;
+    terminalOrder_.emplace_back(job.terminal_at, jobId);
+    if (job.on_terminal) {
+        out.emplace_back(std::move(job.on_terminal), snapshot);
+        job.on_terminal = nullptr;
+    }
+}
+
+// Drops terminal snapshots past the TTL (monotonic clock, measured from completion) and then the
+// oldest ones beyond history_max. Live jobs are never pruned.
+void Queue::pruneLocked() {
+    const auto current = now();
+    const auto ttl = std::chrono::seconds(limits_.history_ttl_sec);
+    const std::size_t maxHistory = static_cast<std::size_t>(limits_.history_max);
+    while (!terminalOrder_.empty()) {
+        const auto& [at, id] = terminalOrder_.front();
+        const std::size_t terminalCount = jobs_.size() - liveJobs_;
+        if (current - at < ttl && terminalCount <= maxHistory) {
+            break;
+        }
+        const auto it = jobs_.find(id);
+        if (it != jobs_.end() && it->second.terminal) {
+            jobs_.erase(it);
+        }
+        terminalOrder_.pop_front();
+    }
+}
+
+JobSnapshot Queue::snapshotLocked(const Job& job) const {
+    JobSnapshot snapshot = job.snapshot;
+    if (!job.terminal && job.op) {
+        if (job.op->running) {
+            snapshot.state = JobState::Running;
+            snapshot.message = "Running";
+        }
+        snapshot.stage = job.op->stage;
+        snapshot.percent = job.op->percent;
+    }
     return snapshot;
 }
 
-void Queue::workerLoop(int workerIndex) {
+void Queue::notify(std::vector<Notification>& notifications) {
+    for (auto& [callback, snapshot] : notifications) {
+        try {
+            callback(snapshot);
+        } catch (const std::exception& error) {
+            yt::logger::Logger::getInstance().error(std::string("Job callback failed: ") +
+                                                    error.what());
+        } catch (...) {
+            yt::logger::Logger::getInstance().error("Job callback failed");
+        }
+    }
+    notifications.clear();
+}
+
+void Queue::workerLoop() {
     auto& logger = yt::logger::Logger::getInstance();
     while (true) {
-        std::shared_ptr<Record> record;
+        std::shared_ptr<Operation> op;
+        converter::ConversionRequest request;
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this] { return !started_ || !waiting_.empty(); });
-            if (!started_ && waiting_.empty()) {
+            cv_.wait(lock, [this] { return stopping_ || !waiting_.empty(); });
+            if (stopping_) {
                 return;
             }
-            if (waiting_.empty()) {
-                continue;
-            }
-            const std::string id = waiting_.front();
+            op = waiting_.front();
             waiting_.pop_front();
-            const auto it = jobs_.find(id);
-            if (it == jobs_.end()) {
+            if (op->cancel->load() || op->subscribers.empty()) {
+                releaseKeyLocked(op);
                 continue;
             }
-            record = it->second;
-            ++running_;
-            record->counted = true;
+            op->running = true;
+            op->stage = "download";
+            running_.insert(op);
+            const auto started = now();
+            for (const auto& id : op->subscribers) {
+                const auto it = jobs_.find(id);
+                if (it != jobs_.end() && !it->second.terminal) {
+                    const auto queueMs = millisBetween(it->second.submitted_at, started);
+                    it->second.snapshot.queue_ms = queueMs;
+                    yt::metrics::recordQueueMs(queueMs);
+                }
+            }
+            // The executable request moves to this worker; the operation keeps only state.
+            request = std::move(op->request);
         }
 
-        if (!record) {
-            continue;
-        }
-        if (record->cancel->load()) {
+        std::weak_ptr<Operation> weak = op;
+        request.cancel = op->cancel;
+        request.on_progress = [this, weak](const std::string& stage, int percent) {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (record->snapshot.state != JobState::Canceled) {
-                record->snapshot.state = JobState::Canceled;
-                record->snapshot.error_code = "canceled";
-                record->snapshot.message = "Canceled";
-            }
-            clearActiveLocked(*record);
-            if (record->counted) {
-                --running_;
-                record->counted = false;
-            }
-            continue;
-        }
-
-        const auto queueMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                 std::chrono::steady_clock::now() - record->queued_at)
-                                 .count();
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            record->snapshot.state = JobState::Running;
-            record->snapshot.stage = "download";
-            record->snapshot.queue_ms =
-                static_cast<std::uint64_t>(std::max<std::int64_t>(0, queueMs));
-            record->snapshot.message = "Running";
-        }
-        yt::metrics::recordQueueMs(static_cast<std::uint64_t>(std::max<std::int64_t>(0, queueMs)));
-
-        logger.setContext({record->request.request_id, record->snapshot.video_id});
-        struct ContextGuard {
-            ~ContextGuard() { yt::logger::Logger::getInstance().clearContext(); }
-        } guard;
-
-        auto* queue = this;
-        const std::string jobId = record->snapshot.job_id;
-        record->request.cancel = record->cancel;
-        record->request.on_progress = [queue, jobId](const std::string& stage, int percent) {
-            std::lock_guard<std::mutex> lock(queue->mutex_);
-            const auto it = queue->jobs_.find(jobId);
-            if (it == queue->jobs_.end() || !it->second) {
-                return;
-            }
-            it->second->snapshot.stage = stage;
-            if (percent >= 0) {
-                it->second->snapshot.percent = percent;
+            if (const auto live = weak.lock()) {
+                live->stage = stage;
+                if (percent >= 0) {
+                    live->percent = percent;
+                }
             }
         };
 
+        std::optional<converter::ConversionResult> conversion;
+        ErrorCode code = ErrorCode::Ok;
+        std::string message;
         try {
-            const auto conversion = yt::converter::processVideo(record->request);
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (record->snapshot.state != JobState::Canceled && !record->cancel->load()) {
-                record->snapshot.state = JobState::Succeeded;
-                record->snapshot.stage = "done";
-                record->snapshot.output_path = conversion.output_path;
-                record->snapshot.error_code = "ok";
-                record->snapshot.message =
-                    conversion.reused ? "Reused existing output" : "Conversion completed";
-                record->snapshot.reused = conversion.reused;
-                record->snapshot.download_ms = conversion.download_ms;
-                record->snapshot.convert_ms = conversion.convert_ms;
-                record->snapshot.bytes = conversion.bytes_downloaded;
-                record->snapshot.percent = 100;
-            }
-            clearActiveLocked(*record);
-        } catch (const yt::Error& error) {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (error.code() == yt::ErrorCode::Canceled || record->cancel->load()) {
-                record->snapshot.state = JobState::Canceled;
-                record->snapshot.error_code = "canceled";
-                record->snapshot.message = "Canceled";
-            } else if (record->snapshot.state != JobState::Canceled) {
-                record->snapshot.state = JobState::Failed;
-                record->snapshot.error_code = error.codeString();
-                record->snapshot.message = error.message();
-            }
-            clearActiveLocked(*record);
-            logger.warning(std::string("Queue worker ") + std::to_string(workerIndex) + " failed " +
-                           record->snapshot.job_id + ": " + error.message());
+            conversion = converter::processVideo(request);
+        } catch (const Error& error) {
+            code = error.code();
+            message = error.message();
         } catch (const std::exception& error) {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (record->snapshot.state != JobState::Canceled) {
-                record->snapshot.state = JobState::Failed;
-                record->snapshot.error_code = "internal_error";
-                record->snapshot.message = error.what();
-            }
-            clearActiveLocked(*record);
+            code = ErrorCode::Internal;
+            message = error.what();
+        } catch (...) {
+            code = ErrorCode::Internal;
+            message = "conversion failed";
+        }
+        if (code != ErrorCode::Ok && code != ErrorCode::Canceled) {
+            logger.warning("Conversion operation failed: " + message);
         }
 
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (record->counted) {
-            --running_;
-            record->counted = false;
+        std::vector<Notification> notifications;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            running_.erase(op);
+            releaseKeyLocked(op);
+            // Only jobs still subscribed receive the outcome; canceled ones stay canceled.
+            for (const auto& id : op->subscribers) {
+                const auto it = jobs_.find(id);
+                if (it == jobs_.end()) {
+                    continue;
+                }
+                if (conversion) {
+                    finalizeLocked(id, it->second, JobState::Succeeded, &*conversion, ErrorCode::Ok,
+                                   conversion->reused ? "Reused existing output"
+                                                      : "Conversion completed",
+                                   notifications);
+                } else if (code == ErrorCode::Canceled) {
+                    finalizeLocked(id, it->second, JobState::Canceled, nullptr, code, "Canceled",
+                                   notifications);
+                } else {
+                    finalizeLocked(id, it->second, JobState::Failed, nullptr, code, message,
+                                   notifications);
+                }
+            }
+            op->subscribers.clear();
+            pruneLocked();
         }
+        notify(notifications);
     }
 }
 

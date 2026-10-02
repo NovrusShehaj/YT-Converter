@@ -18,6 +18,7 @@
 #include <csignal>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <optional>
 #include <random>
 #include <sstream>
@@ -64,7 +65,12 @@ std::string makeRequestId() {
 }
 
 std::string makeJobId(const std::string& videoId, const std::string& format) {
-    return videoId + '-' + format + '-' + makeRequestId();
+    std::random_device device;
+    std::mt19937_64 rng((static_cast<std::uint64_t>(device()) << 32) ^ device());
+    std::ostringstream ss;
+    ss << videoId << '-' << format << '-' << std::hex << std::setw(16) << std::setfill('0')
+       << rng();
+    return ss.str();
 }
 
 bool isSafeJobId(const std::string& id) {
@@ -329,12 +335,12 @@ class ApiServer::Impl {
             replyJson(request, 404, errorBody(ErrorCode::InvalidInput, "Not found"));
             return;
         }
-        const int result = jobQueue.cancel(jobId);
-        if (result == 0) {
+        const auto result = jobQueue.cancel(jobId);
+        if (result == jobs::CancelResult::Missing) {
             replyJson(request, 404, errorBody(ErrorCode::InvalidInput, "Job not found"));
             return;
         }
-        if (result == 2) {
+        if (result == jobs::CancelResult::AlreadyFinished) {
             replyJson(request, 409, errorBody(ErrorCode::InvalidInput, "Job is already finished"));
             return;
         }
@@ -477,9 +483,22 @@ class ApiServer::Impl {
         }
 
         logger.info("Conversion request received");
-        const auto submitted = jobQueue.submit(conversion, videoId, conversion.job_id);
-        if (submitted.kind == jobs::SubmitKind::Full) {
+        jobs::SubmitResult submitted;
+        // A generated ID never replaces an existing record; regenerate on the rare collision.
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            submitted = jobQueue.submit(conversion, videoId, conversion.job_id);
+            if (submitted.kind != jobs::SubmitKind::Duplicate) {
+                break;
+            }
+            conversion.job_id = makeJobId(videoId, normalizedFormat);
+        }
+        if (submitted.kind == jobs::SubmitKind::Full || submitted.kind == jobs::SubmitKind::Busy ||
+            submitted.kind == jobs::SubmitKind::Duplicate) {
             replyJson(request, 503, errorBody(ErrorCode::Busy, "Too many concurrent conversions"));
+            return;
+        }
+        if (submitted.kind == jobs::SubmitKind::Stopping) {
+            replyJson(request, 503, errorBody(ErrorCode::Busy, "Server is shutting down"));
             return;
         }
         json::value queued;
@@ -509,7 +528,13 @@ void ApiServer::start() {
     if (impl_->running.load()) {
         return;
     }
-    impl_->jobQueue.start(impl_->config.max_concurrent, impl_->config.queue_depth);
+    jobs::Limits limits;
+    limits.workers = impl_->config.max_concurrent;
+    limits.max_operations = impl_->config.queue_depth;
+    limits.max_active_jobs = impl_->config.max_active_jobs;
+    limits.history_max = impl_->config.job_history_max;
+    limits.history_ttl_sec = impl_->config.job_history_ttl_sec;
+    impl_->jobQueue.start(limits);
     impl_->listener = std::make_unique<http_listener>(toT(impl_->url()));
     auto* impl = impl_.get();
     impl_->listener->support(methods::GET,

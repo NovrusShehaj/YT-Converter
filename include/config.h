@@ -13,7 +13,14 @@ struct Config {
     std::string log_format = "text";
     std::string output_dir = "./output";
     int max_concurrent = 2;
+    // Queued plus running conversion operations (not client jobs).
     int queue_depth = 8;
+    // Live (queued or running) client job records, including jobs attached to a shared
+    // operation. Initial policy values, not benchmark results.
+    int max_active_jobs = 256;
+    // Retained terminal job snapshots and their lifetime after completion or cancellation.
+    int job_history_max = 1024;
+    int job_history_ttl_sec = 3600;
     int child_timeout_sec = 900;
     int download_timeout_sec = 600;
     int convert_timeout_sec = 300;

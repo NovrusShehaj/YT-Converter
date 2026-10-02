@@ -171,8 +171,11 @@ Environment variables (see `.env.example`; `.env` files are not loaded automatic
 | `YTCONV_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
 | `YTCONV_LOG_FORMAT` | `text` | `text` or `json` |
 | `YTCONV_OUTPUT_DIR` | `./output` | Media root |
-| `YTCONV_MAX_CONCURRENT` | `2` | Worker threads |
-| `YTCONV_QUEUE_DEPTH` | `8` | Max queued jobs |
+| `YTCONV_MAX_CONCURRENT` | `2` | Operations executing at once (worker threads) |
+| `YTCONV_QUEUE_DEPTH` | `8` | Queued plus running conversion operations |
+| `YTCONV_MAX_ACTIVE_JOBS` | `256` | Live client jobs, including ones attached to shared work |
+| `YTCONV_JOB_HISTORY_MAX` | `1024` | Retained finished jobs (oldest dropped first) |
+| `YTCONV_JOB_HISTORY_TTL_SEC` | `3600` | How long a finished job stays queryable |
 | `YTCONV_CHILD_TIMEOUT_SEC` | `900` | Legacy; use `YTCONV_DOWNLOAD_TIMEOUT_SEC` and `YTCONV_CONVERT_TIMEOUT_SEC` |
 | `YTCONV_DOWNLOAD_TIMEOUT_SEC` | `600` | yt-dlp timeout |
 | `YTCONV_CONVERT_TIMEOUT_SEC` | `300` | ffmpeg timeout |

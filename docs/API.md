@@ -84,9 +84,31 @@ When the output file already exists and `reuse_completed` is enabled, the API re
 }
 ```
 
+### Jobs, shared operations, and history
+
+Each accepted request gets its own job ID. Equivalent concurrent requests (same video, format,
+and reuse policy) subscribe to one shared *operation* that performs the download/encode; their
+job status shows `"attached": true`. MP3 and WAV jobs for the same video also share one download.
+
+Job history is bounded and process-local (lost on restart):
+
+- A terminal job (succeeded, failed, canceled) is retained for `YTCONV_JOB_HISTORY_TTL_SEC`
+  (default 3600) after it finished, and at most `YTCONV_JOB_HISTORY_MAX` (default 1024) terminal
+  jobs are kept; the oldest are dropped first. An expired or dropped job ID returns 404.
+- Live (queued or running) jobs are never dropped. At most `YTCONV_MAX_ACTIVE_JOBS` (default 256)
+  live jobs exist, including attached ones; beyond that `POST` returns 503 `busy`.
+- `YTCONV_QUEUE_DEPTH` (default 8) bounds queued plus running *operations*, not jobs; a new
+  operation beyond it returns 503 `busy`. `YTCONV_MAX_CONCURRENT` operations execute at once.
+
+These defaults are an initial policy sized for a personal service, not a benchmark result.
+
 ### Cancel job
 
-`DELETE /v1/jobs/{job_id}` cancels a running job.
+`DELETE /v1/jobs/{job_id}` cancels that one job. It detaches the job from its operation; other
+jobs sharing the operation (or its download) keep running and still get their result. The
+operation, and its child process, is canceled only when its last interested job is canceled
+(SIGTERM, then SIGKILL after two seconds). A canceled job stays canceled even if the shared
+work later succeeds. A second `DELETE` of a finished job returns 409.
 
 ```json
 {
@@ -133,8 +155,11 @@ All responses include `Cache-Control: no-store`. There is no `Access-Control-All
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `YTCONV_MAX_CONCURRENT` | `2` | Worker threads |
-| `YTCONV_QUEUE_DEPTH` | `8` | Max queued jobs |
+| `YTCONV_MAX_CONCURRENT` | `2` | Operations executing at once (worker threads) |
+| `YTCONV_QUEUE_DEPTH` | `8` | Queued plus running operations |
+| `YTCONV_MAX_ACTIVE_JOBS` | `256` | Live client jobs, including attached ones (must be ≥ queue depth) |
+| `YTCONV_JOB_HISTORY_MAX` | `1024` | Retained terminal job snapshots |
+| `YTCONV_JOB_HISTORY_TTL_SEC` | `3600` | Lifetime of a terminal job snapshot after it finished |
 | `YTCONV_DOWNLOAD_TIMEOUT_SEC` | `600` | yt-dlp timeout |
 | `YTCONV_CONVERT_TIMEOUT_SEC` | `300` | ffmpeg timeout |
 | `YTCONV_CONCURRENT_FRAGMENTS` | `4` | yt-dlp fragment concurrency |

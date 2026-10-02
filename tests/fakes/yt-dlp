@@ -21,6 +21,15 @@ for arg in "$@"; do
   prev="$arg"
 done
 
+# Download barrier: announce started.<pid> and wait for "release" (bounded) before producing output.
+if [[ -n "${YTCONV_YTDLP_GATE_DIR:-}" ]]; then
+  touch "$YTCONV_YTDLP_GATE_DIR/started.$$"
+  for _ in $(seq 1 600); do
+    [[ -e "$YTCONV_YTDLP_GATE_DIR/release" ]] && break
+    sleep 0.05
+  done
+fi
+
 if [[ -n "${YTCONV_FAKE_SLEEP:-}" ]]; then
   sleep "$YTCONV_FAKE_SLEEP"
 fi
