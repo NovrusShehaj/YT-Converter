@@ -19,6 +19,27 @@ Still deferred on purpose, because the plan says not to do them without timing e
 
 Unit tests covering the converter, process runner, source cache, and job queue passed here (39 tests). The HTTP tests in `tests/test_api.cpp` still need cpprestsdk, which is not installed in this workspace, so those were not executed here.
 
+## Correction (2026-10-01, merge-readiness remediation)
+
+The status above and several "COMPLETED & VERIFIED" marks below were wrong. A merge-readiness
+review reproduced twelve defects in the claimed behavior, and `.agents/merge-readiness-remediation-plan.md`
+fixed them. The historical text below is left as written; read each claim together with this list.
+Evidence for every item is in [`docs/MERGE_READINESS.md`](../docs/MERGE_READINESS.md).
+
+| Claim below | What was actually true | Fixed by | Tests |
+|---|---|---|---|
+| F04/T04 and the MP3/WAV path work | Every real MP3/WAV/remux conversion failed: ffmpeg could not infer a muxer for `*.partial` (finding 1) | explicit `-f`, unique partials | `MediaTest.*`, `ConverterTest.EachFormatSelectsItsMuxer` |
+| F10/T09 per-job cancel; job routes | `GET`/`DELETE /v1/jobs/{id}` ignored the API key (finding 2); canceling a follower canceled the leader and other formats' downloads (finding 5) | route policy; job/operation split | `ApiTest.JobRoutesEnforceConfiguredApiKey`, `JobQueueTest.Cancel*` |
+| F14/T12 image runs the API | The runtime stage lacked the cpprestsdk library, so `yt2mp3-api` could not start (finding 3) | ldd-derived packages, runtime gate | `docker/verify-runtime.sh`, `tests/container/*` |
+| F08/T08 source cache | Eviction and refresh could delete a source during an encode (finding 4); refresh and disabled reuse could return the old output (finding 8) | leased immutable generations; one reuse policy | `SourceCacheTest.*`, `ReusePolicyTest.*` |
+| F02 admission is bounded | Attached duplicates bypassed admission and job history grew without bound (finding 6) | live-job and history limits | `JobQueueTest.DuplicateStorm*`, `JobQueueTest.*History*` |
+| F01 sync mode kept for compatibility | `YTCONV_SYNC_CONVERSIONS=1` ran conversions on HTTP threads outside every limit (finding 7) | sync through the queue | `SyncApiTest.*` |
+| F11 8 KB body cap before parsing | cpprestsdk buffers whole bodies itself (chunked or not) and the handler blocked on them (finding 9) | request gate, async bounded reads | `GateTest.*` |
+| F05/F07 progress lines | Callback line buffers had no bound (finding 10) | 8 KiB line limit | `ProcessLines.*` |
+| F07 metrics | Shared downloads and reuse were counted once per subscriber (finding 11) | physical vs logical counters | `MetricsTest.*` |
+| F09/T10 re-check after `binary_not_found` | Production code never invalidated the readiness cache (finding 12) | keyed, generation-guarded cache | `ReadinessTest.*` |
+| "39 tests passed"; HTTP tests pending | The HTTP tests had never compiled (gtest/cpprest `U()` clash) and CMake silently dropped the API when cpprestsdk was missing | `yt-converter-api-tests`, strict `BUILD_API` | CI `build` job |
+
 Audit date: 2026-10-01  
 Workspace: `/home/nov/Github/YT-Converter`  
 Branch: `dev/api-improvements`  

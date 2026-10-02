@@ -44,7 +44,8 @@ pip install yt-dlp
 brew install cmake boost cpprestsdk openssl yt-dlp ffmpeg
 ```
 
-Windows is not tested. The process layer has a CreateProcess path, but CI only runs on Linux and macOS.
+Windows is not supported. The API's request gate is POSIX-only, and the Windows paths in the
+process runner and file locks are not built or tested anywhere. CI covers Linux and macOS.
 
 ## Build
 
