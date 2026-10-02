@@ -340,8 +340,9 @@ RunResult runPosix(const std::vector<std::string>& argv, const RunOptions& optio
 
     while (true) {
         const auto now = std::chrono::steady_clock::now();
-        const bool cancelRequested =
-            g_shutdown.load() || (options.cancel && options.cancel->load());
+        const bool cancelRequested = g_shutdown.load() ||
+                                     (options.cancel && options.cancel->load()) ||
+                                     (options.should_cancel && options.should_cancel());
         if (cancelRequested) {
             armCancel();
         }
@@ -595,8 +596,9 @@ RunResult runWindows(const std::vector<std::string>& argv, const RunOptions& opt
 
     while (true) {
         const auto now = std::chrono::steady_clock::now();
-        const bool cancelRequested =
-            g_shutdown.load() || (options.cancel && options.cancel->load());
+        const bool cancelRequested = g_shutdown.load() ||
+                                     (options.cancel && options.cancel->load()) ||
+                                     (options.should_cancel && options.should_cancel());
         if (cancelRequested && !cancelArmed && !result.timed_out) {
             result.canceled = true;
             cancelArmed = true;

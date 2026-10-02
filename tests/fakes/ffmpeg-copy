@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Fake ffmpeg that writes "OUT:" plus the input bytes, so tests can prove which source generation
+# an encode read. With YTCONV_GATE_DIR set and a matching "-f FORMAT" (YTCONV_GATE_FORMAT), it
+# touches started.<pid> and waits for a "release" marker before reading its input: a barrier for
+# deterministic eviction/refresh races.
+set -euo pipefail
+LOGDIR="${YTCONV_FAKE_LOG_DIR:-.}"
+mkdir -p "$LOGDIR"
+
+if [[ "${1:-}" == "-version" ]]; then
+  echo "ffmpeg version 0.0-fake-copy"
+  exit 0
+fi
+
+printf '%s\n' "$@" > "$LOGDIR/ffmpeg.argv"
+echo 1 >> "$LOGDIR/ffmpeg.count"
+
+in=""
+prev=""
+for arg in "$@"; do
+  if [[ "$prev" == "-i" ]]; then
+    in="$arg"
+  fi
+  prev="$arg"
+done
+out="${@: -1}"
+fmt="${@: -2:1}"
+
+if [[ -n "${YTCONV_GATE_DIR:-}" && "$fmt" == "${YTCONV_GATE_FORMAT:-}" ]]; then
+  touch "$YTCONV_GATE_DIR/started.$$"
+  for _ in $(seq 1 600); do
+    [[ -e "$YTCONV_GATE_DIR/release" ]] && break
+    sleep 0.05
+  done
+fi
+
+if [[ ! -f "$in" ]]; then
+  echo "input vanished: $in" >&2
+  exit 1
+fi
+{ printf 'OUT:'; cat -- "$in"; } > "$out"
+exit 0

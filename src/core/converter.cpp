@@ -1,9 +1,11 @@
 #include "converter.h"
 #include "error.h"
+#include "file_lock.h"
 #include "logger.h"
 #include "metrics.h"
 #include "process.h"
 #include "singleflight.h"
+#include "source_cache.h"
 #include "validation.h"
 
 #include <algorithm>
@@ -11,9 +13,9 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <random>
@@ -32,13 +34,17 @@ constexpr std::uintmax_t kMinFreeBytes = 50ull * 1024ull * 1024ull;
 std::mutex g_freeSpaceMutex;
 std::optional<std::uintmax_t> g_freeSpaceOverride;
 
-singleflight::Group& downloadFlights() {
-    static singleflight::Group group;
-    return group;
-}
+// Result of one physical download, shared by every subscriber of its flight. The lease keeps the
+// new generation alive until the last subscriber that needs it is done.
+struct DownloadOutcome {
+    std::shared_ptr<cache::Lease> lease;
+    std::uint64_t download_ms = 0;
+};
 
-singleflight::Group& encodeFlights() {
-    static singleflight::Group group;
+using DownloadGroup = singleflight::Group<DownloadOutcome>;
+
+DownloadGroup& downloadFlights() {
+    static DownloadGroup group;
     return group;
 }
 
@@ -136,24 +142,10 @@ void throwSpawnError(ErrorCode fallback, const std::string& tool,
     throw Error(fallback, ss.str());
 }
 
-void throwFlightError(const std::shared_ptr<singleflight::Flight>& flight) {
-    const auto code = static_cast<ErrorCode>(flight->error_code);
-    const std::string message = flight->error.empty() ? "conversion failed" : flight->error;
-    throw Error(flight->error_code == 0 ? ErrorCode::Internal : code, message);
-}
-
-fs::path findSourceFile(const fs::path& directory) {
-    std::error_code ec;
-    for (const auto& entry : fs::directory_iterator(directory, ec)) {
-        if (!entry.is_regular_file()) {
-            continue;
-        }
-        const std::string name = entry.path().filename().string();
-        if (name.rfind("source.", 0) == 0 && name.find(".part") == std::string::npos) {
-            return entry.path();
-        }
+void throwIfCanceled(const ConversionRequest& request) {
+    if ((request.cancel && request.cancel->load()) || yt::process::shutdownRequested()) {
+        throw Error(ErrorCode::Canceled, "Conversion canceled");
     }
-    return {};
 }
 
 std::string videoFormatSelector(int maxHeight) {
@@ -218,21 +210,6 @@ void ensureSpace(const fs::path& root, std::int64_t maxFileBytes) {
     }
 }
 
-bool cacheFresh(const fs::path& file, int ttlSec) {
-    std::error_code ec;
-    if (!fs::is_regular_file(file, ec) || fs::file_size(file, ec) == 0) {
-        return false;
-    }
-    if (ttlSec <= 0) {
-        return false;
-    }
-    const auto age = fs::file_time_type::clock::now() - fs::last_write_time(file, ec);
-    if (ec) {
-        return false;
-    }
-    return age < std::chrono::seconds(ttlSec);
-}
-
 fs::path metadataCacheDir(const fs::path& outputRoot, const Config& config) {
     if (config.cache_dir.empty()) {
         return outputRoot / "cache" / "ytdlp";
@@ -244,52 +221,14 @@ fs::path metadataCacheDir(const fs::path& outputRoot, const Config& config) {
     return outputRoot / configured;
 }
 
-void evictSourceCache(const fs::path& root, std::int64_t maxBytes, const fs::path& keep) {
-    if (maxBytes <= 0 || !fs::exists(root)) {
-        return;
-    }
-    struct Item {
-        fs::path file;
-        std::uintmax_t bytes = 0;
-        fs::file_time_type when{};
-    };
-    std::vector<Item> items;
-    std::uintmax_t total = 0;
-    std::error_code ec;
-    for (const auto& videoDir : fs::directory_iterator(root, ec)) {
-        if (!videoDir.is_directory()) {
-            continue;
-        }
-        for (const auto& kindDir : fs::directory_iterator(videoDir.path(), ec)) {
-            if (!kindDir.is_directory()) {
-                continue;
-            }
-            const fs::path source = findSourceFile(kindDir.path());
-            if (source.empty()) {
-                continue;
-            }
-            Item item;
-            item.file = source;
-            item.bytes = fs::file_size(source, ec);
-            item.when = fs::last_write_time(source, ec);
-            total += item.bytes;
-            items.push_back(std::move(item));
-        }
-    }
-    std::sort(items.begin(), items.end(),
-              [](const Item& left, const Item& right) { return left.when < right.when; });
-    for (const Item& item : items) {
-        if (total <= static_cast<std::uintmax_t>(maxBytes)) {
-            break;
-        }
-        if (item.file == keep) {
-            continue;
-        }
-        removeIfExists(item.file);
-        if (total >= item.bytes) {
-            total -= item.bytes;
-        }
-    }
+cache::Limits cacheLimits(const Config& config) {
+    cache::Limits limits;
+    limits.max_bytes = config.source_cache_max_bytes;
+    limits.ttl_sec = config.source_cache_ttl_sec;
+    // An active encode is bounded by convert_timeout_sec, so older partials belong to a crashed
+    // process.
+    limits.partial_max_age_sec = config.convert_timeout_sec + 3600;
+    return limits;
 }
 
 // A unique temporary name in the output directory, so concurrent writers never share a partial
@@ -310,28 +249,39 @@ const char* outputMuxer(const std::string& format) {
     return "mp4";
 }
 
-void publishFile(const fs::path& source, const fs::path& partial, const fs::path& finalPath) {
+void linkOrCopy(const fs::path& source, const fs::path& partial) {
     std::error_code ec;
     fs::create_hard_link(source, partial, ec);
     if (ec) {
         fs::copy_file(source, partial, fs::copy_options::overwrite_existing);
     }
-    fs::rename(partial, finalPath);
 }
 
-struct SpawnedDownload {
-    fs::path source;
-    std::uint64_t download_ms = 0;
-    std::uint64_t bytes = 0;
-};
+std::uintmax_t usableSize(const fs::path& path) {
+    std::error_code ec;
+    if (!fs::is_regular_file(path, ec)) {
+        return 0;
+    }
+    const auto size = fs::file_size(path, ec);
+    return ec ? 0 : size;
+}
 
-SpawnedDownload downloadMedia(const ConversionRequest& request, const validation::VideoRef& video,
-                              const fs::path& outputRoot, const fs::path& kindDir) {
+std::uint64_t elapsedMs(std::chrono::steady_clock::time_point started) {
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - started)
+                        .count();
+    return static_cast<std::uint64_t>(std::max<std::int64_t>(1, ms));
+}
+
+// Downloads into a unique incoming directory and publishes it as a new leased generation. The
+// child is canceled only when every subscriber of the flight has canceled.
+DownloadOutcome downloadSource(const ConversionRequest& request, const validation::VideoRef& video,
+                               const fs::path& outputRoot, cache::SourceCache& sourceCache,
+                               const std::string& kind, const std::function<bool()>& abandoned) {
     const bool audioOnly = request.format == "mp3" || request.format == "wav";
-    const fs::path incoming = kindDir / "incoming";
-    removeIfExists(incoming);
-    createPrivateDir(incoming);
-    const fs::path outputTemplate = incoming / "source.%(ext)s";
+    ensureSpace(outputRoot, request.config.max_filesize_bytes);
+    cache::Incoming incoming = sourceCache.beginIncoming(video.id, kind);
+    const fs::path outputTemplate = incoming.dir() / "source.%(ext)s";
     const fs::path ytCache = metadataCacheDir(outputRoot, request.config);
     createPrivateDir(ytCache);
 
@@ -378,37 +328,94 @@ SpawnedDownload downloadMedia(const ConversionRequest& request, const validation
     options.inherit_stderr = false;
     options.on_line = onToolLine;
     options.on_line_user = &lines;
-    options.cancel = request.cancel;
+    options.should_cancel = abandoned;
 
     const auto started = std::chrono::steady_clock::now();
     const auto result = yt::process::run(argv, options);
     if (result.exit_code != 0 || result.not_found || result.timed_out || result.canceled) {
-        removeIfExists(incoming);
         throwSpawnError(ErrorCode::DownloadFailed, request.config.yt_dlp_path, result);
     }
-    const fs::path produced = findSourceFile(incoming);
-    if (produced.empty() || fs::file_size(produced) == 0) {
-        removeIfExists(incoming);
+    const fs::path produced = cache::findSourceFile(incoming.dir());
+    if (produced.empty() || usableSize(produced) == 0) {
         throw Error(ErrorCode::DownloadFailed, "yt-dlp completed without creating a source file");
     }
-    const fs::path stable = kindDir / produced.filename();
-    std::error_code ec;
-    fs::remove(stable, ec);
-    fs::rename(produced, stable);
-    removeIfExists(incoming);
-    evictSourceCache(outputRoot / "cache" / "src", request.config.source_cache_max_bytes, stable);
+    DownloadOutcome outcome;
+    outcome.lease =
+        std::make_shared<cache::Lease>(sourceCache.publish(std::move(incoming), produced));
+    outcome.download_ms = elapsedMs(started);
+    return outcome;
+}
 
-    SpawnedDownload downloaded;
-    downloaded.source = stable;
-    downloaded.bytes = fs::file_size(stable);
-    downloaded.download_ms =
-        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                       std::chrono::steady_clock::now() - started)
-                                       .count());
-    if (downloaded.download_ms == 0) {
-        downloaded.download_ms = 1;
+struct SourceAcquisition {
+    std::shared_ptr<cache::Lease> lease;
+    std::uint64_t download_ms = 0;
+    bool cache_hit = false;
+    bool shared = false;
+    bool downloaded = false;
+};
+
+// Returns a lease on a usable source generation: a fresh cached one when policy allows, else the
+// result of a (possibly shared) download. The lease is held until the caller is done with it.
+SourceAcquisition acquireSource(const ConversionRequest& request, const validation::VideoRef& video,
+                                const fs::path& outputRoot, cache::SourceCache& sourceCache,
+                                const std::string& kind) {
+    const cache::Limits limits = cacheLimits(request.config);
+    // A refresh only accepts a generation whose download started after the request was admitted.
+    const std::int64_t minStamp = request.refresh ? request.admitted_at : 0;
+    SourceAcquisition acquired;
+    if (auto lease = sourceCache.acquire(video.id, kind, limits, minStamp)) {
+        acquired.lease = std::make_shared<cache::Lease>(std::move(*lease));
+        acquired.cache_hit = true;
+        yt::logger::Logger::getInstance().info("Reusing cached source for " + video.id);
+        return acquired;
     }
-    return downloaded;
+
+    const std::string key = outputRoot.string() + "\n" + video.id + "\n" + kind;
+    auto& flights = downloadFlights();
+    const auto membership = flights.join(key, request.cancel, minStamp, cache::nowStamp());
+    if (!membership.is_leader) {
+        if (!flights.wait(membership.flight, request.cancel)) {
+            throw Error(ErrorCode::Canceled, "Conversion canceled while waiting for a download");
+        }
+        const auto& flight = *membership.flight;
+        if (!flight.value) {
+            const auto code = flight.error_code == 0 ? ErrorCode::Internal
+                                                     : static_cast<ErrorCode>(flight.error_code);
+            throw Error(code, flight.error.empty() ? "download failed" : flight.error);
+        }
+        acquired.lease = flight.value->lease;
+        acquired.download_ms = flight.value->download_ms;
+        acquired.shared = true;
+        return acquired;
+    }
+
+    const auto flight = membership.flight;
+    try {
+        DownloadOutcome outcome =
+            downloadSource(request, video, outputRoot, sourceCache, kind,
+                           [flight] { return downloadFlights().abandoned(flight); });
+        acquired.lease = outcome.lease;
+        acquired.download_ms = outcome.download_ms;
+        acquired.downloaded = true;
+        flights.succeed(key, flight, std::move(outcome));
+    } catch (const Error& error) {
+        flights.fail(key, flight, static_cast<int>(error.code()), error.message());
+        throw;
+    } catch (const std::exception& error) {
+        flights.fail(key, flight, static_cast<int>(ErrorCode::Internal), error.what());
+        throw;
+    } catch (...) {
+        flights.fail(key, flight, static_cast<int>(ErrorCode::Internal), "download failed");
+        throw;
+    }
+    // Reclaim retired or over-cap generations now that the new one is leased.
+    try {
+        sourceCache.maintain(limits);
+    } catch (const std::exception& error) {
+        yt::logger::Logger::getInstance().warning(std::string("Source cache maintenance failed: ") +
+                                                  error.what());
+    }
+    return acquired;
 }
 
 void convertMedia(const ConversionRequest& request, const fs::path& source,
@@ -456,23 +463,32 @@ void logCompletion(const ConversionResult& result, const std::string& format) {
     std::ostringstream ss;
     ss << "Conversion completed video_id=" << result.video_id << " format=" << format
        << " reused=" << (result.reused ? "true" : "false") << " download_ms=" << result.download_ms
-       << " convert_ms=" << result.convert_ms << " bytes=" << result.bytes_downloaded;
+       << " convert_ms=" << result.convert_ms << " source_bytes=" << result.source_bytes
+       << " output_bytes=" << result.output_bytes;
     yt::logger::Logger::getInstance().info(ss.str());
 }
 
-ConversionResult resultFromFlight(const ConversionRequest& request,
-                                  const validation::VideoRef& video,
-                                  const singleflight::Flight& flight, bool reused) {
-    ConversionResult result;
-    result.output_path = flight.value;
-    result.job_id = request.job_id;
-    result.video_id = video.id;
-    result.reused = reused;
-    result.download_ms = flight.download_ms;
-    result.convert_ms = flight.convert_ms;
-    result.bytes_downloaded = flight.bytes;
-    return result;
-}
+// Removes a partial output on every exit path unless it was renamed into place.
+struct PartialGuard {
+    fs::path path;
+    ~PartialGuard() { removeIfExists(path); }
+};
+
+// Releases the source lease before reclaiming cache space, on every exit path.
+struct CacheMaintenance {
+    cache::SourceCache& cache;
+    cache::Limits limits;
+    std::shared_ptr<cache::Lease>* lease;
+    ~CacheMaintenance() {
+        lease->reset();
+        try {
+            cache.maintain(limits);
+        } catch (const std::exception& error) {
+            yt::logger::Logger::getInstance().warning(
+                std::string("Source cache maintenance failed: ") + error.what());
+        }
+    }
+};
 
 } // namespace
 
@@ -501,6 +517,9 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
     if (request.job_id.empty()) {
         request.job_id = makeJobId(video.id, {});
     }
+    if (request.admitted_at == 0) {
+        request.admitted_at = cache::nowStamp();
+    }
 
     auto& logger = yt::logger::Logger::getInstance();
     logger.setContext({request.request_id, video.id});
@@ -513,18 +532,23 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
     if (!pathIsInside(outputRoot, finalPath)) {
         throw Error(ErrorCode::InvalidInput, "Output path escapes the output root");
     }
-    const fs::path partial = uniquePartialPath(finalPath);
+
+    auto completedOutput = [&](bool reused, std::uint64_t downloadMs) {
+        ConversionResult result;
+        result.output_path = fs::weakly_canonical(finalPath).string();
+        result.job_id = request.job_id;
+        result.video_id = video.id;
+        result.reused = reused;
+        result.download_ms = downloadMs;
+        result.output_bytes = usableSize(finalPath);
+        return result;
+    };
 
     if (request.config.reuse_completed && !request.config.force && !request.refresh &&
-        fs::exists(finalPath) && fs::file_size(finalPath) > 0) {
+        usableSize(finalPath) > 0) {
         yt::metrics::recordStart();
-        ConversionResult reused;
-        reused.output_path = fs::weakly_canonical(finalPath).string();
-        reused.job_id = request.job_id;
-        reused.video_id = video.id;
-        reused.reused = true;
-        reused.bytes_downloaded = fs::file_size(finalPath);
-        yt::metrics::recordSuccess(fs::file_size(finalPath), 0, 0, reused.bytes_downloaded);
+        ConversionResult reused = completedOutput(true, 0);
+        yt::metrics::recordSuccess(reused.output_bytes, 0, 0, 0);
         logCompletion(reused, request.format);
         return reused;
     }
@@ -532,165 +556,83 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
     const bool audioOnly = request.format == "mp3" || request.format == "wav";
     const std::string kind =
         audioOnly ? "audio" : ("v" + std::to_string(request.config.max_height));
-    const std::string downloadKey = outputRoot.string() + "\n" + video.id + "\n" + kind;
-    const std::string encodeKey = outputRoot.string() + "\n" + video.id + "\n" + request.format;
     const fs::path kindDir = outputRoot / "cache" / "src" / video.id / kind;
     if (!pathIsInside(outputRoot, kindDir)) {
         throw Error(ErrorCode::InvalidInput, "Cache directory escapes the output root");
     }
 
-    const auto encodeMembership = encodeFlights().join(encodeKey);
-    if (!encodeMembership.is_leader) {
-        encodeFlights().wait(encodeMembership.flight);
-        if (!encodeMembership.flight->ok) {
-            throwFlightError(encodeMembership.flight);
-        }
-        const ConversionResult followed =
-            resultFromFlight(request, video, *encodeMembership.flight, true);
-        logCompletion(followed, request.format);
-        return followed;
-    }
+    cache::SourceCache sourceCache(outputRoot);
+    std::shared_ptr<cache::Lease> lease;
+    // Declared before the work so it runs last: drop the lease, then reclaim space.
+    CacheMaintenance maintenance{sourceCache, cacheLimits(request.config), &lease};
+    PartialGuard partial{uniquePartialPath(finalPath)};
 
-    bool encodePublished = false;
-    bool metricsStarted = false;
+    yt::metrics::recordStart();
     try {
         logger.info("Starting conversion to " + request.format);
-        yt::metrics::recordStart();
-        metricsStarted = true;
+        SourceAcquisition source = acquireSource(request, video, outputRoot, sourceCache, kind);
+        lease = source.lease;
+        // A canceled request stops here even when it carried a download that others still use.
+        throwIfCanceled(request);
 
-        fs::path source;
-        std::uint64_t downloadMs = 0;
-        std::uint64_t downloadedBytes = 0;
-        const fs::path cached = findSourceFile(kindDir);
-        if (!request.refresh && cacheFresh(cached, request.config.source_cache_ttl_sec)) {
-            source = cached;
-            downloadedBytes = fs::file_size(cached);
-            logger.info("Reusing cached source for " + video.id);
-        } else {
-            const auto downloadMembership = downloadFlights().join(downloadKey);
-            if (!downloadMembership.is_leader) {
-                downloadFlights().wait(downloadMembership.flight);
-                if (!downloadMembership.flight->ok) {
-                    throwFlightError(downloadMembership.flight);
-                }
-                source = downloadMembership.flight->value;
-                downloadMs = downloadMembership.flight->download_ms;
-                downloadedBytes = downloadMembership.flight->bytes;
-            } else {
-                try {
-                    ensureSpace(outputRoot, request.config.max_filesize_bytes);
-                    if (request.refresh) {
-                        removeIfExists(cached);
-                    }
-                    const SpawnedDownload downloaded =
-                        downloadMedia(request, video, outputRoot, kindDir);
-                    source = downloaded.source;
-                    downloadMs = downloaded.download_ms;
-                    downloadedBytes = downloaded.bytes;
-                    downloadMembership.flight->value = source.string();
-                    downloadMembership.flight->download_ms = downloadMs;
-                    downloadMembership.flight->bytes = downloadedBytes;
-                    downloadFlights().succeed(downloadKey, downloadMembership.flight);
-                } catch (const Error& error) {
-                    downloadFlights().fail(downloadKey, downloadMembership.flight,
-                                           static_cast<int>(error.code()), error.message());
-                    throw;
-                } catch (const std::exception& error) {
-                    downloadFlights().fail(downloadKey, downloadMembership.flight,
-                                           static_cast<int>(ErrorCode::Internal), error.what());
-                    throw;
-                }
-            }
+        // One writer per final output, across threads and processes. Held through the encode so
+        // competing writers neither duplicate work nor interleave publication.
+        const fs::path lockDir = outputRoot / "cache" / "locks";
+        createPrivateDir(lockDir);
+        const auto waitLimit = std::chrono::seconds(
+            static_cast<std::int64_t>(request.config.convert_timeout_sec) + 30);
+        fs_lock::FileLock writer = fs_lock::FileLock::acquireCancelable(
+            lockDir / (finalPath.filename().string() + ".lock"), fs_lock::Mode::Exclusive,
+            request.cancel, waitLimit);
+        if (!writer.held()) {
+            throwIfCanceled(request);
+            throw Error(ErrorCode::Timeout, "Timed out waiting for another writer of this output");
         }
 
-        std::uint64_t convertMs = 0;
-        if (!request.config.force && fs::exists(finalPath) && fs::file_size(finalPath) > 0) {
-            ConversionResult ready;
-            ready.output_path = fs::weakly_canonical(finalPath).string();
-            ready.job_id = request.job_id;
-            ready.video_id = video.id;
-            ready.reused = true;
-            ready.download_ms = downloadMs;
-            ready.convert_ms = 0;
-            ready.bytes_downloaded = downloadedBytes;
-            encodeMembership.flight->value = ready.output_path;
-            encodeMembership.flight->download_ms = downloadMs;
-            encodeMembership.flight->bytes = downloadedBytes;
-            encodeFlights().succeed(encodeKey, encodeMembership.flight);
-            encodePublished = true;
-            yt::metrics::recordSuccess(fs::file_size(finalPath), downloadMs, 0, downloadedBytes);
+        if (!request.config.force && usableSize(finalPath) > 0) {
+            ConversionResult ready = completedOutput(true, source.download_ms);
+            ready.source_bytes = lease->bytes();
+            ready.bytes_downloaded = lease->bytes();
+            ready.source_generation = lease->generation();
+            yt::metrics::recordSuccess(ready.output_bytes, source.download_ms, 0, lease->bytes());
             logCompletion(ready, request.format);
             return ready;
         }
 
-        const bool alreadyMp4 =
-            !audioOnly && source.extension() == ".mp4" && fs::file_size(source) > 0;
+        std::uint64_t convertMs = 0;
+        const bool alreadyMp4 = !audioOnly && lease->source().extension() == ".mp4";
         if (alreadyMp4) {
             logger.info("Skipping ffmpeg remux for MP4");
-            publishFile(source, partial, finalPath);
+            linkOrCopy(lease->source(), partial.path);
         } else {
             const auto convertStart = std::chrono::steady_clock::now();
-            convertMedia(request, source, partial);
-            convertMs =
-                static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                               std::chrono::steady_clock::now() - convertStart)
-                                               .count());
-            if (!fs::exists(partial) || fs::file_size(partial) == 0) {
+            convertMedia(request, lease->source(), partial.path);
+            convertMs = elapsedMs(convertStart);
+            if (usableSize(partial.path) == 0) {
                 throw Error(ErrorCode::ConversionFailed, "ffmpeg produced an empty output file");
             }
-            fs::rename(partial, finalPath);
         }
+        throwIfCanceled(request);
+        fs::rename(partial.path, finalPath);
 
-        if (!fs::exists(finalPath) || fs::file_size(finalPath) == 0) {
+        ConversionResult result = completedOutput(false, source.download_ms);
+        result.convert_ms = convertMs;
+        result.source_bytes = lease->bytes();
+        result.bytes_downloaded = lease->bytes();
+        result.source_generation = lease->generation();
+        result.source_cache_hit = source.cache_hit;
+        result.shared_download = source.shared;
+        result.downloaded = source.downloaded;
+        result.published = true;
+        if (result.output_bytes == 0) {
             throw Error(ErrorCode::ConversionFailed, "Conversion produced an empty output file");
         }
-
-        ConversionResult result;
-        result.output_path = fs::weakly_canonical(finalPath).string();
-        result.job_id = request.job_id;
-        result.video_id = video.id;
-        result.download_ms = downloadMs;
-        result.convert_ms = convertMs;
-        result.bytes_downloaded = downloadedBytes;
-        encodeMembership.flight->value = result.output_path;
-        encodeMembership.flight->download_ms = downloadMs;
-        encodeMembership.flight->convert_ms = convertMs;
-        encodeMembership.flight->bytes = downloadedBytes;
-        encodeFlights().succeed(encodeKey, encodeMembership.flight);
-        encodePublished = true;
-        yt::metrics::recordSuccess(fs::file_size(finalPath), downloadMs, convertMs,
-                                   downloadedBytes);
+        yt::metrics::recordSuccess(result.output_bytes, source.download_ms, convertMs,
+                                   lease->bytes());
         logCompletion(result, request.format);
         return result;
-    } catch (const Error& error) {
-        removeIfExists(partial);
-        if (!encodePublished) {
-            encodeFlights().fail(encodeKey, encodeMembership.flight, static_cast<int>(error.code()),
-                                 error.message());
-        }
-        if (metricsStarted) {
-            yt::metrics::recordFailure();
-        }
-        throw;
-    } catch (const std::exception& error) {
-        removeIfExists(partial);
-        if (!encodePublished) {
-            encodeFlights().fail(encodeKey, encodeMembership.flight,
-                                 static_cast<int>(ErrorCode::Internal), error.what());
-        }
-        if (metricsStarted) {
-            yt::metrics::recordFailure();
-        }
-        throw;
     } catch (...) {
-        removeIfExists(partial);
-        if (!encodePublished) {
-            encodeFlights().fail(encodeKey, encodeMembership.flight,
-                                 static_cast<int>(ErrorCode::Internal), "conversion failed");
-        }
-        if (metricsStarted) {
-            yt::metrics::recordFailure();
-        }
+        yt::metrics::recordFailure();
         throw;
     }
 }

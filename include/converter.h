@@ -20,7 +20,12 @@ struct ConversionRequest {
     std::string job_id;
     bool show_progress = false;
     bool refresh = false;
+    // Admission time (nanoseconds since the Unix epoch). A refresh only accepts a source
+    // generation whose download started at or after this time. 0 means "now" at processVideo().
+    std::int64_t admitted_at = 0;
     std::function<void(const std::string& stage, int percent)> on_progress;
+    // Cancellation token for this operation. A shared download keeps running while any other
+    // subscriber still needs it, even after this token is set.
     std::shared_ptr<std::atomic<bool>> cancel;
 };
 
@@ -28,10 +33,20 @@ struct ConversionResult {
     std::string output_path;
     std::string job_id;
     std::string video_id;
+    // True only when an already completed output file satisfied the request.
     bool reused = false;
     std::uint64_t download_ms = 0;
     std::uint64_t convert_ms = 0;
+    // Size of the source file used (an approximation of downloaded media bytes, not wire
+    // traffic). Kept for compatibility; see source_bytes.
     std::uint64_t bytes_downloaded = 0;
+    std::uint64_t source_bytes = 0;
+    std::uint64_t output_bytes = 0;
+    std::string source_generation;
+    bool source_cache_hit = false;
+    bool shared_download = false;
+    bool downloaded = false;
+    bool published = false;
 };
 
 ConversionResult processVideo(const ConversionRequest& request);

@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -27,6 +28,9 @@ struct RunOptions {
     LineCallback on_line = nullptr;
     void* on_line_user = nullptr;
     std::shared_ptr<std::atomic<bool>> cancel;
+    // Optional extra cancellation condition, polled at least every 100 ms (for example "every
+    // subscriber of this shared download has canceled"). Must be cheap and must not block.
+    std::function<bool()> should_cancel;
 };
 
 struct RunResult {

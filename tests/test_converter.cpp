@@ -315,9 +315,17 @@ TEST_F(ConverterTest, SourceCacheEvictsOldest) {
     second.config = first.config;
     yt::converter::processVideo(second);
 
-    const auto cache = output_ / "cache" / "src";
-    EXPECT_FALSE(std::filesystem::exists(cache / "dQw4w9WgXcQ" / "audio" / "source.mp4"));
-    EXPECT_TRUE(std::filesystem::exists(cache / "jNQXAC9IVRw" / "audio" / "source.mp4"));
+    auto generationCount = [&](const std::string& video) {
+        int count = 0;
+        std::error_code ec;
+        for (const auto& entry :
+             std::filesystem::directory_iterator(output_ / "cache" / "src" / video / "audio", ec)) {
+            count += entry.path().filename().string().rfind("gen-", 0) == 0 ? 1 : 0;
+        }
+        return count;
+    };
+    EXPECT_EQ(generationCount("dQw4w9WgXcQ"), 0);
+    EXPECT_EQ(generationCount("jNQXAC9IVRw"), 1);
 }
 
 TEST_F(ConverterTest, OutputFilenameNeverContainsTraversal) {

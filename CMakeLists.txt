@@ -77,6 +77,8 @@ configure_file(${YTCONV_INCLUDE_DIR}/version.h.in ${YTCONV_GENERATED_DIR}/versio
 
 set(CORE_SOURCES
     ${YTCONV_SRC_DIR}/core/converter.cpp
+    ${YTCONV_SRC_DIR}/core/source_cache.cpp
+    ${YTCONV_SRC_DIR}/utils/file_lock.cpp
     ${YTCONV_SRC_DIR}/utils/validation.cpp
     ${YTCONV_SRC_DIR}/utils/logger.cpp
     ${YTCONV_SRC_DIR}/utils/error.cpp
@@ -86,7 +88,6 @@ set(CORE_SOURCES
     ${YTCONV_SRC_DIR}/utils/dependencies.cpp
     ${YTCONV_SRC_DIR}/utils/metrics.cpp
     ${YTCONV_SRC_DIR}/utils/job_queue.cpp
-    ${YTCONV_SRC_DIR}/utils/singleflight.cpp
 )
 
 add_library(yt-converter-core STATIC ${CORE_SOURCES})
@@ -140,6 +141,7 @@ if(BUILD_TESTS)
         tests/test_config.cpp
         tests/test_logger.cpp
         tests/test_job_queue.cpp
+        tests/test_source_cache.cpp
     )
     add_executable(yt-converter-tests ${TEST_SOURCES})
     target_link_libraries(yt-converter-tests
@@ -155,7 +157,9 @@ if(BUILD_TESTS)
         PRIVATE
             YTCONV_FAKE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fakes"
             YTCONV_OUTPUT_WRITER="$<TARGET_FILE:ytconv-output-writer>"
+            YTCONV_CLI_PATH="$<TARGET_FILE:yt2mp3-cli>"
     )
+    add_dependencies(yt-converter-tests yt2mp3-cli)
 
     file(GLOB YTCONV_FAKES ${CMAKE_CURRENT_SOURCE_DIR}/tests/fakes/*)
     foreach(fake ${YTCONV_FAKES})
