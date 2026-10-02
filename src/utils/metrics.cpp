@@ -60,6 +60,15 @@ void recordReadyCheck(bool spawned) {
     }
 }
 
+void setQueueGauges(std::uint64_t jobsQueued, std::uint64_t jobsRunning,
+                    std::uint64_t operationsQueued, std::uint64_t operationsRunning) {
+    auto& counters = global();
+    counters.jobs_queued.store(jobsQueued);
+    counters.jobs_running.store(jobsRunning);
+    counters.operations_queued.store(operationsQueued);
+    counters.operations_running.store(operationsRunning);
+}
+
 std::string toJson() {
     const auto& counters = global();
     std::ostringstream ss;
@@ -73,7 +82,11 @@ std::string toJson() {
        << ",\"queue_ms_total\":" << counters.queue_ms_total.load()
        << ",\"bytes_downloaded\":" << counters.bytes_downloaded.load()
        << ",\"ready_checks\":" << counters.ready_checks.load()
-       << ",\"ready_spawns\":" << counters.ready_spawns.load() << '}';
+       << ",\"ready_spawns\":" << counters.ready_spawns.load()
+       << ",\"jobs_queued\":" << counters.jobs_queued.load()
+       << ",\"jobs_running\":" << counters.jobs_running.load()
+       << ",\"operations_queued\":" << counters.operations_queued.load()
+       << ",\"operations_running\":" << counters.operations_running.load() << '}';
     return ss.str();
 }
 

@@ -157,7 +157,7 @@ The response is JSON with an absolute `output_path`. Bytes are not streamed. The
 
 If `YTCONV_API_KEY` is set, send `X-Api-Key`. HTTP codes actually produced: 200, 202, 400, 401, 404, 405, 409, 500, 503, 504, 507.
 
-`YTCONV_SYNC_CONVERSIONS=1` keeps the old blocking `200` response. Leave it unset so `POST` returns `202` and the work runs on the queue. `GET /v1/healthz` is the high-frequency probe. `GET /v1/readyz` checks tools at most once per `YTCONV_READY_TTL_SEC` (default 60).
+`YTCONV_SYNC_CONVERSIONS=1` keeps the old `200`-on-completion response, but runs through the same bounded queue as async mode. Leave it unset so `POST` returns `202` and the work runs on the queue. `GET /v1/healthz` is the high-frequency probe. `GET /v1/readyz` checks tools at most once per `YTCONV_READY_TTL_SEC` (default 60).
 
 See [docs/API.md](docs/API.md).
 

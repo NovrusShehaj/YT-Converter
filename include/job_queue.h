@@ -149,6 +149,7 @@ class Queue {
     void releaseKeyLocked(const std::shared_ptr<Operation>& op);
     void pruneLocked();
     JobSnapshot snapshotLocked(const Job& job) const;
+    void publishGaugesLocked() const;
     static void notify(std::vector<Notification>& notifications);
 
     mutable std::mutex mutex_;

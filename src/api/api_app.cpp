@@ -142,6 +142,24 @@ json::value jobJson(const jobs::JobSnapshot& job) {
     return body;
 }
 
+// Final response for a synchronous conversion, built from the same snapshot as job status.
+void replySync(const http_request& request, const jobs::JobSnapshot& job, bool shuttingDown) {
+    if (job.state == jobs::JobState::Succeeded) {
+        json::value body = jobJson(job);
+        body[U("status")] = json::value::string(U("success"));
+        replyJson(request, 200, body);
+        return;
+    }
+    if (job.state == jobs::JobState::Canceled && shuttingDown) {
+        replyJson(request, 503, errorBody(ErrorCode::Busy, "Server is shutting down"));
+        return;
+    }
+    const ErrorCode code = job.code == ErrorCode::Ok ? ErrorCode::Internal : job.code;
+    json::value body = errorBody(code, job.message);
+    body[U("job_id")] = json::value::string(toT(job.job_id));
+    replyJson(request, errorHttpStatus(code), body);
+}
+
 void onSignal(int) {
     g_shutdown.store(true);
 }
@@ -167,6 +185,8 @@ class ApiServer::Impl {
     explicit Impl(Config cfg) : config(std::move(cfg)) {}
 
     Config config;
+    // Read by synchronous completion callbacks; shared so it outlives this object if needed.
+    std::shared_ptr<std::atomic<bool>> stopping_ = std::make_shared<std::atomic<bool>>(false);
     jobs::Queue jobQueue;
     std::unique_ptr<http_listener> listener;
     std::atomic<bool> running{false};
@@ -456,33 +476,22 @@ class ApiServer::Impl {
             return;
         }
 
+        // Synchronous mode uses the same queue, admission limits, sharing, and cancellation as
+        // asynchronous mode. The response stays outstanding until the job's terminal callback
+        // replies; no listener thread blocks. The callback captures only the request and a
+        // shared shutdown flag, never server state, and Queue::stop() resolves it.
+        jobs::TerminalCallback onTerminal;
         if (config.sync_conversions) {
-            try {
-                const auto result = yt::converter::processVideo(conversion);
-                json::value ok;
-                ok[U("status")] = json::value::string(U("success"));
-                ok[U("error_code")] = json::value::string(U("ok"));
-                ok[U("message")] = json::value::string(U("Conversion completed"));
-                ok[U("output_path")] = json::value::string(toT(result.output_path));
-                ok[U("job_id")] = json::value::string(toT(result.job_id));
-                ok[U("reused")] = json::value::boolean(result.reused);
-                ok[U("download_ms")] = json::value::number(static_cast<double>(result.download_ms));
-                ok[U("convert_ms")] = json::value::number(static_cast<double>(result.convert_ms));
-                ok[U("bytes")] = json::value::number(static_cast<double>(result.bytes_downloaded));
-                ok[U("request_id")] = json::value::string(toT(requestId));
-                replyJson(request, 200, ok);
-            } catch (const yt::Error& error) {
-                logger.warning(error.message());
-                replyJson(request, error.httpStatus(), errorBody(error));
-            }
-            return;
+            onTerminal = [request, stopping = stopping_](const jobs::JobSnapshot& job) {
+                replySync(request, job, stopping->load());
+            };
         }
 
         logger.info("Conversion request received");
         jobs::SubmitResult submitted;
         // A generated ID never replaces an existing record; regenerate on the rare collision.
         for (int attempt = 0; attempt < 4; ++attempt) {
-            submitted = jobQueue.submit(conversion, videoId, conversion.job_id);
+            submitted = jobQueue.submit(conversion, videoId, conversion.job_id, onTerminal);
             if (submitted.kind != jobs::SubmitKind::Duplicate) {
                 break;
             }
@@ -496,6 +505,9 @@ class ApiServer::Impl {
         if (submitted.kind == jobs::SubmitKind::Stopping) {
             replyJson(request, 503, errorBody(ErrorCode::Busy, "Server is shutting down"));
             return;
+        }
+        if (config.sync_conversions) {
+            return; // replied by onTerminal
         }
         json::value queued;
         queued[U("status")] = json::value::string(U("queued"));
@@ -524,6 +536,7 @@ void ApiServer::start() {
     if (impl_->running.load()) {
         return;
     }
+    impl_->stopping_->store(false);
     jobs::Limits limits;
     limits.workers = impl_->config.max_concurrent;
     limits.max_operations = impl_->config.queue_depth;
@@ -546,6 +559,9 @@ void ApiServer::start() {
 
 void ApiServer::stop() {
     impl_->running.store(false);
+    impl_->stopping_->store(true);
+    // Resolves outstanding synchronous responses (503) and joins workers before the listener
+    // and the rest of the server state go away.
     impl_->jobQueue.stop();
     if (impl_->listener) {
         impl_->listener->close().wait();

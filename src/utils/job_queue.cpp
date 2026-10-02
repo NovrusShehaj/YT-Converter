@@ -117,6 +117,7 @@ void Queue::stop() {
             op->subscribers.clear();
         }
         activeByKey_.clear();
+        publishGaugesLocked();
     }
     cv_.notify_all();
     // Sync HTTP responses waiting on these jobs resolve before workers are joined.
@@ -209,6 +210,7 @@ SubmitResult Queue::submit(converter::ConversionRequest request, const std::stri
     auto& stored = jobs_[jobId];
     stored = std::move(job);
     result.snapshot = snapshotLocked(stored);
+    publishGaugesLocked();
     return result;
 }
 
@@ -239,6 +241,7 @@ CancelResult Queue::cancel(const std::string& jobId) {
         finalizeLocked(jobId, job, JobState::Canceled, nullptr, ErrorCode::Canceled, "Canceled",
                        notifications);
         detachLocked(jobId, op);
+        publishGaugesLocked();
     }
     notify(notifications);
     return CancelResult::Canceled;
@@ -362,6 +365,18 @@ JobSnapshot Queue::snapshotLocked(const Job& job) const {
     return snapshot;
 }
 
+void Queue::publishGaugesLocked() const {
+    std::uint64_t queuedJobs = 0;
+    std::uint64_t runningJobs = 0;
+    for (const auto& op : waiting_) {
+        queuedJobs += op->subscribers.size();
+    }
+    for (const auto& op : running_) {
+        runningJobs += op->subscribers.size();
+    }
+    yt::metrics::setQueueGauges(queuedJobs, runningJobs, waiting_.size(), running_.size());
+}
+
 void Queue::notify(std::vector<Notification>& notifications) {
     for (auto& [callback, snapshot] : notifications) {
         try {
@@ -407,6 +422,7 @@ void Queue::workerLoop() {
             }
             // The executable request moves to this worker; the operation keeps only state.
             request = std::move(op->request);
+            publishGaugesLocked();
         }
 
         std::weak_ptr<Operation> weak = op;
@@ -466,6 +482,7 @@ void Queue::workerLoop() {
             }
             op->subscribers.clear();
             pruneLocked();
+            publishGaugesLocked();
         }
         notify(notifications);
     }

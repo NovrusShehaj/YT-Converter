@@ -19,6 +19,11 @@ struct Counters {
     std::atomic<std::uint64_t> bytes_downloaded{0};
     std::atomic<std::uint64_t> ready_checks{0};
     std::atomic<std::uint64_t> ready_spawns{0};
+    // Queue gauges, published as absolute values from queue state (they cannot underflow).
+    std::atomic<std::uint64_t> jobs_queued{0};
+    std::atomic<std::uint64_t> jobs_running{0};
+    std::atomic<std::uint64_t> operations_queued{0};
+    std::atomic<std::uint64_t> operations_running{0};
 };
 
 Counters& global();
@@ -34,6 +39,8 @@ void recordConvertMs(std::uint64_t ms);
 void recordBytesDownloaded(std::uint64_t bytes);
 void recordQueueMs(std::uint64_t ms);
 void recordReadyCheck(bool spawned);
+void setQueueGauges(std::uint64_t jobsQueued, std::uint64_t jobsRunning,
+                    std::uint64_t operationsQueued, std::uint64_t operationsRunning);
 
 } // namespace yt::metrics
 

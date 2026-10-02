@@ -19,6 +19,7 @@
 using namespace web;
 using namespace web::http;
 using namespace web::http::client;
+namespace fs = std::filesystem;
 
 namespace {
 
@@ -509,4 +510,112 @@ TEST_F(ApiTest, RefreshAndForceAreIndependentOverHttp) {
     EXPECT_EQ(readFile(finalPath), "OUT:THIRD"); // new source generation
     EXPECT_EQ(countLines(output_ / "yt-dlp.count"), 2);
     unsetenv("YTCONV_FAKE_CONTENT");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Synchronous mode (finding 7): same queue, limits, sharing, and shutdown behavior as async.
+
+class SyncApiTest : public ApiTest {
+  protected:
+    void SetUp() override {
+        ApiTest::SetUp();
+        gate_ = makeTestDir();
+        setenv("YTCONV_YTDLP_GATE_DIR", gate_.string().c_str(), 1);
+        auto config = baseConfig();
+        config.sync_conversions = true;
+        config.max_concurrent = 1;
+        config.queue_depth = 2;
+        restartServer(config);
+    }
+
+    void TearDown() override {
+        openGate(gate_);
+        unsetenv("YTCONV_YTDLP_GATE_DIR");
+        ApiTest::TearDown();
+    }
+
+    pplx::task<http_response> postAsync(const std::string& video, const std::string& format) {
+        auto client = std::make_shared<http_client>(utility::conversions::to_string_t(base_));
+        http_request req(methods::POST);
+        req.set_request_uri(U("/v1/conversions"));
+        req.set_body(postBody("https://www.youtube.com/watch?v=" + video, format));
+        return client->request(req).then([client](http_response response) { return response; });
+    }
+
+    fs::path gate_;
+};
+
+TEST_F(SyncApiTest, SyncRequestsObeyOperationAndChildLimits) {
+    auto first = postAsync("dQw4w9WgXcQ", "mp3");
+    ASSERT_TRUE(waitUntil([&] { return gateStartedPids(gate_).size() == 1; }));
+    auto second = postAsync("jNQXAC9IVRw", "mp3");
+    // Give the second request time to be admitted (it queues behind the single worker).
+    ASSERT_TRUE(waitUntil([&] {
+        auto metrics = request(methods::GET, "/v1/metrics").extract_json().get();
+        return metrics.has_field(U("operations_queued")) &&
+               metrics.at(U("operations_queued")).as_integer() == 1;
+    }));
+    // Queue depth 2 is exhausted: a third distinct sync request is rejected immediately.
+    const auto rejectStarted = std::chrono::steady_clock::now();
+    auto third = postAsync("9bZkp7q19f0", "mp3").get();
+    EXPECT_EQ(third.status_code(), status_codes::ServiceUnavailable);
+    EXPECT_LT(std::chrono::steady_clock::now() - rejectStarted, std::chrono::seconds(2));
+
+    // Health stays responsive while sync responses are outstanding.
+    const auto healthStarted = std::chrono::steady_clock::now();
+    EXPECT_EQ(request(methods::GET, "/v1/healthz").status_code(), status_codes::OK);
+    EXPECT_LT(std::chrono::steady_clock::now() - healthStarted, std::chrono::seconds(1));
+    // Only one child ever ran at a time.
+    EXPECT_EQ(gateStartedPids(gate_).size(), 1u);
+
+    openGate(gate_);
+    auto firstResponse = first.get();
+    auto secondResponse = second.get();
+    EXPECT_EQ(firstResponse.status_code(), status_codes::OK);
+    EXPECT_EQ(secondResponse.status_code(), status_codes::OK);
+    const auto body = firstResponse.extract_json().get();
+    EXPECT_EQ(field(body, "status"), "success");
+    EXPECT_FALSE(field(body, "output_path").empty());
+    EXPECT_TRUE(body.has_field(U("download_ms")));
+}
+
+TEST_F(SyncApiTest, SyncAndAsyncSubscribersShareOneOperation) {
+    auto sync = postAsync("dQw4w9WgXcQ", "mp3");
+    ASSERT_TRUE(waitUntil([&] { return gateStartedPids(gate_).size() == 1; }));
+    // An async-mode server is not needed: a second sync request attaches to the same operation.
+    auto attached = postAsync("dQw4w9WgXcQ", "mp3");
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    openGate(gate_);
+    EXPECT_EQ(sync.get().status_code(), status_codes::OK);
+    EXPECT_EQ(attached.get().status_code(), status_codes::OK);
+    EXPECT_EQ(countLines(output_ / "yt-dlp.count"), 1);
+    EXPECT_EQ(countLines(output_ / "ffmpeg.count"), 1);
+}
+
+TEST_F(SyncApiTest, SyncFailuresKeepTypedStatusCodes) {
+    openGate(gate_);
+    auto config = baseConfig();
+    config.sync_conversions = true;
+    config.yt_dlp_path = fakePath("fail");
+    restartServer(config);
+    auto failed = postAsync("dQw4w9WgXcQ", "mp3").get();
+    EXPECT_EQ(failed.status_code(), status_codes::InternalError);
+    EXPECT_EQ(field(failed.extract_json().get(), "error_code"), "download_failed");
+
+    config.yt_dlp_path = "/no/such/yt-dlp-ytconv";
+    restartServer(config);
+    auto missing = postAsync("dQw4w9WgXcQ", "wav").get();
+    EXPECT_EQ(missing.status_code(), status_codes::ServiceUnavailable);
+    EXPECT_EQ(field(missing.extract_json().get(), "error_code"), "binary_not_found");
+}
+
+TEST_F(SyncApiTest, ShutdownResolvesOutstandingSyncResponses) {
+    auto outstanding = postAsync("dQw4w9WgXcQ", "mp3");
+    ASSERT_TRUE(waitUntil([&] { return gateStartedPids(gate_).size() == 1; }));
+    const auto started = std::chrono::steady_clock::now();
+    server_->stop();
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(10));
+    auto response = outstanding.get();
+    EXPECT_EQ(response.status_code(), status_codes::ServiceUnavailable);
+    server_.reset();
 }

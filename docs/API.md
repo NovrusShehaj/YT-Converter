@@ -111,6 +111,18 @@ Sharing and ordering rules:
 }
 ```
 
+### Synchronous mode
+
+With `YTCONV_SYNC_CONVERSIONS=1`, `POST /v1/conversions` answers when the job finishes instead of
+returning 202. Synchronous requests go through the same queue as asynchronous ones: the same
+operation and child limits, the same 503 `busy` admission rejection (returned immediately), the
+same sharing with equivalent requests, and the same cancellation (`DELETE` still works). The
+response is held open without blocking a listener thread. Success returns 200 with the job
+status fields and `"status": "success"`; failures return the typed status (for example 500
+`download_failed`, 503 `binary_not_found`, 504 `timeout`); a response still open at shutdown gets
+503. A client disconnect does not cancel the job, because other clients may share its operation;
+use `DELETE /v1/jobs/{id}` to cancel.
+
 ### Jobs, shared operations, and history
 
 Each accepted request gets its own job ID. Equivalent concurrent requests (same video, format,
@@ -196,4 +208,4 @@ All responses include `Cache-Control: no-store`. There is no `Access-Control-All
 | `YTCONV_SOURCE_CACHE_TTL_SEC` | `86400` | Reuse a downloaded source for this many seconds |
 | `YTCONV_SOURCE_CACHE_MAX_BYTES` | `10G` | Evict the oldest cached sources above this size |
 | `YTCONV_REUSE_COMPLETED` | `1` | `0` disables completed-output reuse (every request re-encodes) |
-| `YTCONV_SYNC_CONVERSIONS` | unset | `1` makes `POST /v1/conversions` block until the file is ready |
+| `YTCONV_SYNC_CONVERSIONS` | unset | `1` keeps the `POST /v1/conversions` response open until the job finishes |
