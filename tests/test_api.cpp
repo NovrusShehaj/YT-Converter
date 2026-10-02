@@ -893,3 +893,30 @@ TEST_F(GateTest, InternalListenerRejectsRequestsThatBypassTheGate) {
     EXPECT_EQ(direct.request(req).get().status_code(), status_codes::Forbidden);
 }
 #endif
+
+TEST_F(ApiTest, ReadinessRecoversAfterALaunchFailureWhileHealthStaysUp) {
+    const auto tools = makeTestDir();
+    std::filesystem::copy_file(fakePath("yt-dlp"), tools / "yt-dlp");
+    std::filesystem::permissions(tools / "yt-dlp", std::filesystem::perms::owner_all,
+                                 std::filesystem::perm_options::replace);
+    auto config = baseConfig();
+    config.yt_dlp_path = (tools / "yt-dlp").string();
+    config.ready_ttl_sec = 3600;
+    restartServer(config);
+    EXPECT_EQ(request(methods::GET, "/v1/readyz").status_code(), status_codes::OK);
+
+    std::filesystem::remove(tools / "yt-dlp");
+    auto created = request(methods::POST, "/v1/conversions",
+                           postBody("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "mp3"));
+    ASSERT_EQ(created.status_code(), status_codes::Accepted);
+    const auto job = waitJob(field(created.extract_json().get(), "job_id"));
+    EXPECT_EQ(field(job, "error_code"), "binary_not_found");
+
+    EXPECT_EQ(request(methods::GET, "/v1/readyz").status_code(), status_codes::ServiceUnavailable);
+    EXPECT_EQ(request(methods::GET, "/v1/healthz").status_code(), status_codes::OK);
+
+    std::filesystem::copy_file(fakePath("yt-dlp"), tools / "yt-dlp");
+    std::filesystem::permissions(tools / "yt-dlp", std::filesystem::perms::owner_all,
+                                 std::filesystem::perm_options::replace);
+    EXPECT_EQ(request(methods::GET, "/v1/readyz").status_code(), status_codes::OK);
+}

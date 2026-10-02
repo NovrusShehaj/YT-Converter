@@ -5,6 +5,9 @@ mkdir -p "$LOGDIR"
 
 if [[ "${1:-}" == "--version" ]]; then
   echo 1 >> "$LOGDIR/yt-dlp.version.count"
+  if [[ -n "${YTCONV_FAKE_VERSION_SLEEP:-}" ]]; then
+    sleep "$YTCONV_FAKE_VERSION_SLEEP"
+  fi
   echo "2024.12.23-fake"
   exit 0
 fi

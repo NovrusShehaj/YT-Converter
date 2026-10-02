@@ -215,7 +215,7 @@ reaching that port without the gate's per-process secret are rejected with 403.
 
 `GET /v1/healthz` → `{"status":"ok"}`
 
-`GET /v1/readyz` → 200 `{"status":"ready"}` if `yt-dlp` and `ffmpeg` respond and the output directory is writable; otherwise 503. Tool checks are cached for 60 seconds.
+`GET /v1/readyz` → 200 `{"status":"ready"}` if `yt-dlp` and `ffmpeg` respond and the output directory is writable; otherwise 503. Readiness is a current, advisory probe: a successful tool check is cached per tool configuration for `YTCONV_READY_TTL_SEC` (default 60; 0 disables caching), failures are never cached, and simultaneous checks share one probe. When a conversion cannot launch a tool, the cache is invalidated, so the next readiness check probes again inside the old TTL and reports the missing tool; restoring the tool makes readiness succeed again. A probe that was already running when the cache was invalidated cannot republish its older success. `/v1/healthz` never spawns tools.
 
 `GET /v1/metrics` (loopback only) returns in-process counters (reset on restart).
 

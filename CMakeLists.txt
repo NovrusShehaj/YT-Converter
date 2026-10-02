@@ -147,6 +147,7 @@ if(BUILD_TESTS)
         tests/test_source_cache.cpp
         tests/test_reuse_policy.cpp
         tests/test_metrics.cpp
+        tests/test_dependencies.cpp
     )
     add_executable(yt-converter-tests ${TEST_SOURCES})
     target_link_libraries(yt-converter-tests

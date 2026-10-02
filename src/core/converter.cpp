@@ -1,4 +1,5 @@
 #include "converter.h"
+#include "dependencies.h"
 #include "error.h"
 #include "file_lock.h"
 #include "logger.h"
@@ -123,6 +124,8 @@ void throwSpawnError(ErrorCode fallback, const std::string& tool,
         throw Error(ErrorCode::Canceled, tool + " canceled");
     }
     if (result.not_found) {
+        // A cached "ready" must not survive a tool that can no longer be launched.
+        yt::deps::invalidateReadiness();
         throw Error(ErrorCode::BinaryNotFound, "Required tool not found: " + tool);
     }
     if (result.timed_out) {
