@@ -161,16 +161,30 @@ jobs:
           YTCONV_REQUIRE_MEDIA_TESTS: "1"
         run: ctest --test-dir build --output-on-failure --timeout 900
 
+  container:
+    name: Container image (dependency closure and smoke test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The build fails on unresolved libraries or a compiler in the runtime stage
+      # (docker/verify-runtime.sh); the smoke tests use fake tools and no YouTube traffic.
+      - name: Build image
+        run: docker build -t ytconv:ci .
+      - name: Smoke test the runtime image as UID 10001
+        run: bash tests/container/smoke.sh ytconv:ci
+      - name: Exercise docker-compose.yml
+        run: bash tests/container/compose-smoke.sh
+
   build-status:
     name: Build Status Check
     runs-on: ubuntu-latest
-    needs: [build, clean-checkout, sanitizers]
+    needs: [build, clean-checkout, sanitizers, container]
     if: always()
     steps:
       - name: Check build status
         run: |
           for result in "${{ needs.build.result }}" "${{ needs.clean-checkout.result }}" \
-                        "${{ needs.sanitizers.result }}"; do
+                        "${{ needs.sanitizers.result }}" "${{ needs.container.result }}"; do
             if [ "$result" != "success" ]; then
               echo "A required build gate did not succeed: $result"
               exit 1

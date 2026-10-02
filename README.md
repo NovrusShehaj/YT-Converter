@@ -192,6 +192,26 @@ Environment variables (see `.env.example`; `.env` files are not loaded automatic
 
 INFO logs use `request_id` and `video_id`, not the user URL.
 
+## Docker
+
+The image builds both binaries (an API build that cannot find cpprestsdk fails), installs the
+exact shared-library packages the binaries need (derived from their `ldd` closure in the build
+stage), and refuses to build if any library is unresolved or a compiler is present in the
+runtime stage. The service runs as UID 10001, binds loopback by default, pins yt-dlp, and has a
+`/v1/healthz` healthcheck.
+
+```sh
+docker build -t yt-converter .
+mkdir -p output && sudo chown 10001:10001 output   # the container user must own the mount
+docker compose up -d
+curl -fsS http://127.0.0.1:8080/v1/readyz
+```
+
+A root-owned `./output` (what Docker creates when the directory is missing) makes readiness
+report `Output directory is not writable`; fix the ownership rather than running as root.
+`tests/container/smoke.sh IMAGE` and `tests/container/compose-smoke.sh` are the container gates
+run in CI.
+
 ## Project structure
 
 ```

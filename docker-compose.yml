@@ -1,5 +1,10 @@
 # Personal localhost example. This does not publish a public converter.
 # Binding 127.0.0.1 inside the container is only reachable via network_mode: host.
+#
+# The service runs as UID 10001, never as root. Create the bind-mounted output directory and
+# give it to that user before the first start; if Docker creates ./output itself it is owned by
+# root, /v1/readyz reports "Output directory is not writable", and conversions fail:
+#   mkdir -p output && sudo chown 10001:10001 output
 
 services:
   yt2mp3-api:
