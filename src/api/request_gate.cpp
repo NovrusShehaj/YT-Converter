@@ -169,6 +169,9 @@ struct RequestGate::Impl {
     int upstreamPort = 0;
     std::thread thread;
     std::atomic<bool> stopping{false};
+    // After an accept() failure such as EMFILE, stop polling the listener briefly instead of
+    // spinning on a socket that stays readable.
+    Clock::time_point acceptPausedUntil{};
     std::list<Connection> connections;
 
     mutable std::mutex statsMutex;
@@ -306,7 +309,10 @@ void RequestGate::Impl::acceptAll() {
         socklen_t len = sizeof(addr);
         const int fd = ::accept(listenFd, reinterpret_cast<sockaddr*>(&addr), &len);
         if (fd < 0) {
-            return; // EAGAIN or a transient error; poll again
+            if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+                acceptPausedUntil = Clock::now() + std::chrono::milliseconds(100);
+            }
+            return;
         }
         setNonBlocking(fd);
         bump([](GateStats& s) { ++s.accepted; });
@@ -714,9 +720,10 @@ void RequestGate::Impl::loop() {
         owners.clear();
         fds.push_back({wake[0], POLLIN, 0});
         owners.emplace_back(nullptr, false);
-        fds.push_back({listenFd, POLLIN, 0});
-        owners.emplace_back(nullptr, false);
         auto now = Clock::now();
+        const bool acceptPaused = now < acceptPausedUntil;
+        fds.push_back({acceptPaused ? -1 : listenFd, POLLIN, 0}); // negative fd: ignored
+        owners.emplace_back(nullptr, false);
         auto nextDeadline = now + std::chrono::milliseconds(200);
         for (auto& conn : connections) {
             short clientEvents = 0;

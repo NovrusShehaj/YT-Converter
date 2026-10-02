@@ -1,0 +1,5 @@
+# cpprestsdk's bytestream::open_istream (containerstream.h) reinterprets a streambuf<char> as a
+# streambuf<unsigned char>, which -fsanitize=vptr reports from inside cpprest headers whenever a
+# JSON response body is set. This is third-party header code, not project code; the suppression
+# is limited to cpprest's Concurrency namespace so every other vptr check stays active.
+vptr_check:Concurrency*

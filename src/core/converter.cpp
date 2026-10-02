@@ -732,7 +732,12 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
         throwIfCanceled(request);
         const std::uintmax_t publishedBytes = usableSize(partial.path);
         fs::rename(partial.path, finalPath);
-        writeOutputRecord(recordPath, OutputRecord{lease->stamp(), cache::nowStamp()});
+        try {
+            writeOutputRecord(recordPath, OutputRecord{lease->stamp(), cache::nowStamp()});
+        } catch (const std::exception& error) {
+            // The output is already published; a missing record only weakens ordering checks.
+            logger.warning(std::string("Unable to record output publication: ") + error.what());
+        }
         yt::metrics::recordPublication(publishedBytes);
 
         ConversionResult result = completedOutput(false, source.download_ms);
