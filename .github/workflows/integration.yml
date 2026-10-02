@@ -62,11 +62,21 @@ jobs:
           print(json.dumps(job, indent=2))
           if job.get("status") not in ("succeeded", "success"):
               raise SystemExit(1)
+          # Field meanings: download_ms/convert_ms are the operation's stage durations;
+          # source_bytes is the downloaded source file size (not wire traffic); output_bytes is
+          # the published file size. See docs/API.md "Metrics".
           lines = [
               f"download_ms={job.get('download_ms', 0)}",
               f"convert_ms={job.get('convert_ms', 0)}",
-              f"bytes={job.get('bytes', 0)}",
+              f"source_bytes={job.get('source_bytes', job.get('bytes', 0))}",
+              f"output_bytes={job.get('output_bytes', 0)}",
+              f"reused={job.get('reused', False)}",
           ]
+          with urllib.request.urlopen("http://127.0.0.1:8765/v1/metrics") as response:
+              metrics = json.load(response)
+          for key in ("downloads_total", "download_ms_total", "source_bytes_downloaded",
+                      "encodes_total", "convert_ms_total", "bytes_written"):
+              lines.append(f"metrics.{key}={metrics.get(key, 0)}")
           pathlib.Path("/tmp/timing.txt").write_text("\n".join(lines) + "\n")
           print("\n".join(lines))
           PY

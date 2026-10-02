@@ -217,7 +217,14 @@ json::value jobJson(const jobs::JobSnapshot& job) {
     body[U("reused")] = json::value::boolean(job.reused);
     body[U("download_ms")] = json::value::number(static_cast<double>(job.download_ms));
     body[U("convert_ms")] = json::value::number(static_cast<double>(job.convert_ms));
+    // "bytes" is kept for compatibility and equals source_bytes (source file size, not wire
+    // traffic). Durations describe the shared operation and are not added to global totals again.
     body[U("bytes")] = json::value::number(static_cast<double>(job.bytes));
+    body[U("source_bytes")] = json::value::number(static_cast<double>(job.source_bytes));
+    body[U("output_bytes")] = json::value::number(static_cast<double>(job.output_bytes));
+    body[U("attached")] = json::value::boolean(job.attached);
+    body[U("shared_download")] = json::value::boolean(job.shared_download);
+    body[U("source_cache_hit")] = json::value::boolean(job.source_cache_hit);
     body[U("queue_ms")] = json::value::number(static_cast<double>(job.queue_ms));
     if (job.percent >= 0) {
         body[U("percent")] = json::value::number(job.percent);
@@ -601,6 +608,8 @@ class ApiServer::Impl {
 
         // Same eligibility rule as the converter's own checks (see converter.h).
         if (const auto reused = yt::converter::findReusableOutput(conversion)) {
+            yt::metrics::recordJobAccepted(false);
+            yt::metrics::recordJobOutcome(yt::metrics::JobOutcome::Succeeded, true);
             json::value ok;
             ok[U("status")] = json::value::string(U("success"));
             ok[U("error_code")] = json::value::string(U("ok"));

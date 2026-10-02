@@ -207,6 +207,7 @@ SubmitResult Queue::submit(converter::ConversionRequest request, const std::stri
     job.submitted_at = now();
     op->subscribers.push_back(jobId);
     ++liveJobs_;
+    yt::metrics::recordJobAccepted(job.snapshot.attached);
     auto& stored = jobs_[jobId];
     stored = std::move(job);
     result.snapshot = snapshotLocked(stored);
@@ -325,6 +326,10 @@ void Queue::finalizeLocked(const std::string& jobId, Job& job, JobState state,
         snapshot.source_cache_hit = result->source_cache_hit;
     }
     --liveJobs_;
+    yt::metrics::recordJobOutcome(state == JobState::Succeeded  ? yt::metrics::JobOutcome::Succeeded
+                                  : state == JobState::Canceled ? yt::metrics::JobOutcome::Canceled
+                                                                : yt::metrics::JobOutcome::Failed,
+                                  snapshot.reused);
     terminalOrder_.emplace_back(job.terminal_at, jobId);
     if (job.on_terminal) {
         out.emplace_back(std::move(job.on_terminal), snapshot);

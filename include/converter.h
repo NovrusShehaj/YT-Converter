@@ -37,9 +37,8 @@ struct ConversionResult {
     bool reused = false;
     std::uint64_t download_ms = 0;
     std::uint64_t convert_ms = 0;
-    // Size of the source file used (an approximation of downloaded media bytes, not wire
-    // traffic). Kept for compatibility; see source_bytes.
-    std::uint64_t bytes_downloaded = 0;
+    // Size of the source file used. When this operation downloaded it, an approximation of the
+    // downloaded media bytes (not wire traffic); otherwise cached or shared bytes, not new work.
     std::uint64_t source_bytes = 0;
     std::uint64_t output_bytes = 0;
     std::string source_generation;

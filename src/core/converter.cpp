@@ -333,17 +333,23 @@ DownloadOutcome downloadSource(const ConversionRequest& request, const validatio
 
     const auto started = std::chrono::steady_clock::now();
     const auto result = yt::process::run(argv, options);
+    const std::uint64_t downloadMs = elapsedMs(started);
+    // One measurement per physical download attempt. Partial bytes of a failed download are
+    // unknown, so failures add zero bytes.
     if (result.exit_code != 0 || result.not_found || result.timed_out || result.canceled) {
+        yt::metrics::recordDownload(false, downloadMs, 0);
         throwSpawnError(ErrorCode::DownloadFailed, request.config.yt_dlp_path, result);
     }
     const fs::path produced = cache::findSourceFile(incoming.dir());
     if (produced.empty() || usableSize(produced) == 0) {
+        yt::metrics::recordDownload(false, downloadMs, 0);
         throw Error(ErrorCode::DownloadFailed, "yt-dlp completed without creating a source file");
     }
     DownloadOutcome outcome;
     outcome.lease =
         std::make_shared<cache::Lease>(sourceCache.publish(std::move(incoming), produced));
-    outcome.download_ms = elapsedMs(started);
+    outcome.download_ms = downloadMs;
+    yt::metrics::recordDownload(true, downloadMs, outcome.lease->bytes());
     return outcome;
 }
 
@@ -367,6 +373,7 @@ SourceAcquisition acquireSource(const ConversionRequest& request, const validati
     if (auto lease = sourceCache.acquire(video.id, kind, limits, minStamp)) {
         acquired.lease = std::make_shared<cache::Lease>(std::move(*lease));
         acquired.cache_hit = true;
+        yt::metrics::recordSourceCacheHit();
         yt::logger::Logger::getInstance().info("Reusing cached source for " + video.id);
         return acquired;
     }
@@ -387,6 +394,7 @@ SourceAcquisition acquireSource(const ConversionRequest& request, const validati
         acquired.lease = flight.value->lease;
         acquired.download_ms = flight.value->download_ms;
         acquired.shared = true;
+        yt::metrics::recordSharedDownload();
         return acquired;
     }
 
@@ -628,10 +636,10 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
         return result;
     };
 
+    // Physical metrics are recorded where work happens; logical job outcomes are recorded by
+    // the job's owner (queue, HTTP fast path, or CLI). Reuse adds no physical work.
     if (auto reused = findReusableOutput(request)) {
         reused->job_id = request.job_id;
-        yt::metrics::recordStart();
-        yt::metrics::recordSuccess(reused->output_bytes, 0, 0, 0);
         logCompletion(*reused, request.format);
         return *reused;
     }
@@ -650,8 +658,7 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
     CacheMaintenance maintenance{sourceCache, cacheLimits(request.config), &lease};
     PartialGuard partial{uniquePartialPath(finalPath)};
 
-    yt::metrics::recordStart();
-    try {
+    {
         logger.info("Starting conversion to " + request.format);
         SourceAcquisition source = acquireSource(request, video, outputRoot, sourceCache, kind);
         lease = source.lease;
@@ -690,12 +697,10 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
             ConversionResult ready = completedOutput(true, source.download_ms);
             ready.superseded = !allowsCompletedOutputReuse(request);
             ready.source_bytes = lease->bytes();
-            ready.bytes_downloaded = lease->bytes();
             ready.source_generation = lease->generation();
             ready.source_cache_hit = source.cache_hit;
             ready.shared_download = source.shared;
             ready.downloaded = source.downloaded;
-            yt::metrics::recordSuccess(ready.output_bytes, source.download_ms, 0, lease->bytes());
             logCompletion(ready, request.format);
             return ready;
         }
@@ -707,21 +712,29 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
             linkOrCopy(lease->source(), partial.path);
         } else {
             const auto convertStart = std::chrono::steady_clock::now();
-            convertMedia(request, lease->source(), partial.path);
-            convertMs = elapsedMs(convertStart);
-            if (usableSize(partial.path) == 0) {
-                throw Error(ErrorCode::ConversionFailed, "ffmpeg produced an empty output file");
+            try {
+                convertMedia(request, lease->source(), partial.path);
+                if (usableSize(partial.path) == 0) {
+                    throw Error(ErrorCode::ConversionFailed,
+                                "ffmpeg produced an empty output file");
+                }
+            } catch (...) {
+                yt::metrics::recordEncode(false, elapsedMs(convertStart));
+                throw;
             }
+            convertMs = elapsedMs(convertStart);
+            yt::metrics::recordEncode(true, convertMs);
         }
         // A job canceled before publication never creates new output.
         throwIfCanceled(request);
+        const std::uintmax_t publishedBytes = usableSize(partial.path);
         fs::rename(partial.path, finalPath);
         writeOutputRecord(recordPath, OutputRecord{lease->stamp(), cache::nowStamp()});
+        yt::metrics::recordPublication(publishedBytes);
 
         ConversionResult result = completedOutput(false, source.download_ms);
         result.convert_ms = convertMs;
         result.source_bytes = lease->bytes();
-        result.bytes_downloaded = lease->bytes();
         result.source_generation = lease->generation();
         result.source_cache_hit = source.cache_hit;
         result.shared_download = source.shared;
@@ -730,13 +743,8 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
         if (result.output_bytes == 0) {
             throw Error(ErrorCode::ConversionFailed, "Conversion produced an empty output file");
         }
-        yt::metrics::recordSuccess(result.output_bytes, source.download_ms, convertMs,
-                                   lease->bytes());
         logCompletion(result, request.format);
         return result;
-    } catch (...) {
-        yt::metrics::recordFailure();
-        throw;
     }
 }
 

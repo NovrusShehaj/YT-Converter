@@ -107,6 +107,11 @@ Sharing and ordering rules:
   "download_ms": 1200,
   "convert_ms": 400,
   "bytes": 1048576,
+  "source_bytes": 1048576,
+  "output_bytes": 4194304,
+  "attached": false,
+  "shared_download": false,
+  "source_cache_hit": false,
   "reused": false
 }
 ```
@@ -212,7 +217,39 @@ reaching that port without the gate's per-process secret are rejected with 403.
 
 `GET /v1/readyz` → 200 `{"status":"ready"}` if `yt-dlp` and `ffmpeg` respond and the output directory is writable; otherwise 503. Tool checks are cached for 60 seconds.
 
-`GET /v1/metrics` (loopback only) returns in-process counters including `download_ms_total`, `convert_ms_total`, `queue_ms_total`, and `bytes_downloaded`.
+`GET /v1/metrics` (loopback only) returns in-process counters (reset on restart).
+
+## Metrics
+
+Physical work is counted once where it happens, however many jobs share it. Logical job
+outcomes are counted once per client job. Gauges are absolute values read from queue state.
+
+| Field | Kind | Meaning |
+|---|---|---|
+| `jobs_started` | logical | Accepted jobs: queued, attached, or answered by immediate reuse |
+| `jobs_succeeded` / `jobs_failed` / `jobs_canceled` | logical | Terminal outcome of each job, exactly once |
+| `jobs_reused` | logical | Successful jobs satisfied by a completed output file (subset of succeeded) |
+| `jobs_coalesced` | logical | Jobs attached to an existing operation |
+| `jobs_queued` / `jobs_running` / `jobs_active` | gauge | Live jobs by operation state; `jobs_active` is their sum |
+| `operations_queued` / `operations_running` | gauge | Executable operations (each runs at most one download and one encode) |
+| `downloads_total` / `download_failures_total` | physical | yt-dlp runs that produced a source / failed or were canceled |
+| `download_ms_total` | physical | Duration of every download attempt, counted once |
+| `source_bytes_downloaded` | physical | Size of each newly downloaded source file. An approximation of media bytes, not wire traffic (no retries, metadata, headers, or merge overhead). Failed downloads add 0. `bytes_downloaded` is a deprecated alias with the same value |
+| `source_cache_hits_total` / `shared_downloads_total` | physical | Operations served by a cached source / by joining another operation's download (both add 0 downloaded bytes) |
+| `encodes_total` / `encode_failures_total` / `convert_ms_total` | physical | ffmpeg runs and their total duration |
+| `outputs_published_total` / `bytes_written` | physical | Outputs renamed into place and their sizes; reuse writes nothing |
+| `queue_ms_total` | logical | Time jobs waited before their operation started |
+| `ready_checks` / `ready_spawns` | probe | Readiness checks and those that spawned tool probes |
+
+Job status fields `download_ms` and `convert_ms` describe the operation the job used (a job that
+shared a download shows that download's duration); they never add to the totals again.
+`source_bytes` is the size of the source file used, `output_bytes` the size of the output,
+`bytes` a compatibility alias of `source_bytes`, and `shared_download`/`source_cache_hit` say how
+the source was obtained.
+
+Changes in meaning from earlier builds: `bytes_downloaded` used to add the source size for every
+successful job, including reuse and shared downloads, and `bytes_written` included reused
+outputs; both now count new physical work only. `jobs_active` is now a gauge of live jobs.
 
 All responses include `Cache-Control: no-store`. There is no `Access-Control-Allow-Origin: *`.
 

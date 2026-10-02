@@ -76,7 +76,7 @@ TEST_F(ConverterTest, SuccessWritesFinalFileAndRemovesTemp) {
     EXPECT_EQ(countPartialFiles(output_), 0);
 
     EXPECT_GT(result.download_ms, 0u);
-    EXPECT_EQ(result.bytes_downloaded, 4u);
+    EXPECT_EQ(result.source_bytes, 4u);
 }
 
 TEST_F(ConverterTest, Mp4UsesVideoFormatSelector) {
