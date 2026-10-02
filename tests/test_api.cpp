@@ -465,3 +465,48 @@ TEST_F(ApiTest, UnauthenticatedLocalhostModeKeepsJobRoutesOpen) {
     EXPECT_EQ(field(job, "status"), "succeeded");
     EXPECT_EQ(request(methods::DEL, "/v1/jobs/" + jobId).status_code(), status_codes::Conflict);
 }
+
+TEST_F(ApiTest, RefreshAndForceAreIndependentOverHttp) {
+    auto config = baseConfig();
+    config.ffmpeg_path = fakePath("ffmpeg-copy");
+    restartServer(config);
+    const std::string url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+    const auto finalPath = output_ / "dQw4w9WgXcQ.mp3";
+    auto convert = [&](const char* content, const char* flag) {
+        setenv("YTCONV_FAKE_CONTENT", content, 1);
+        auto body = postBody(url, "mp3");
+        if (flag != nullptr) {
+            body[utility::conversions::to_string_t(flag)] = json::value::boolean(true);
+        }
+        auto response = request(methods::POST, "/v1/conversions", body);
+        const auto status = response.status_code();
+        const auto json = response.extract_json().get();
+        if (status == status_codes::Accepted) {
+            return std::make_pair(status, waitJob(field(json, "job_id")));
+        }
+        return std::make_pair(status, json);
+    };
+
+    auto first = convert("FIRST", nullptr);
+    ASSERT_EQ(first.first, status_codes::Accepted);
+    EXPECT_EQ(readFile(finalPath), "OUT:FIRST");
+
+    auto reused = convert("IGNORED", nullptr);
+    EXPECT_EQ(reused.first, status_codes::OK);
+    EXPECT_TRUE(reused.second.at(U("reused")).as_bool());
+
+    auto forced = convert("IGNORED", "force");
+    ASSERT_EQ(forced.first, status_codes::Accepted);
+    EXPECT_EQ(field(forced.second, "status"), "succeeded");
+    EXPECT_FALSE(forced.second.at(U("reused")).as_bool());
+    EXPECT_EQ(readFile(finalPath), "OUT:FIRST"); // re-encoded from the cached source
+    EXPECT_EQ(countLines(output_ / "yt-dlp.count"), 1);
+    EXPECT_EQ(countLines(output_ / "ffmpeg.count"), 2);
+
+    auto refreshed = convert("THIRD", "refresh");
+    ASSERT_EQ(refreshed.first, status_codes::Accepted);
+    EXPECT_EQ(field(refreshed.second, "status"), "succeeded");
+    EXPECT_EQ(readFile(finalPath), "OUT:THIRD"); // new source generation
+    EXPECT_EQ(countLines(output_ / "yt-dlp.count"), 2);
+    unsetenv("YTCONV_FAKE_CONTENT");
+}

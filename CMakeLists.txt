@@ -142,6 +142,7 @@ if(BUILD_TESTS)
         tests/test_logger.cpp
         tests/test_job_queue.cpp
         tests/test_source_cache.cpp
+        tests/test_reuse_policy.cpp
     )
     add_executable(yt-converter-tests ${TEST_SOURCES})
     target_link_libraries(yt-converter-tests

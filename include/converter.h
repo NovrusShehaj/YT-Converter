@@ -47,7 +47,22 @@ struct ConversionResult {
     bool shared_download = false;
     bool downloaded = false;
     bool published = false;
+    // A newer publication of the same output satisfied this request, so it did not publish.
+    bool superseded = false;
 };
+
+// Reuse policy, shared by the CLI, the queue, and the HTTP fast path.
+//
+// | reuse_completed | force  | refresh | behavior                                              |
+// | yes             | no     | no      | reuse a valid completed output, else encode           |
+// | yes             | yes    | no      | replace the output; a fresh cached source is allowed  |
+// | any             | any    | yes     | new source generation, then replace the output        |
+// | no              | any    | no      | encode and publish again; cached source allowed       |
+//
+// Completed-output reuse requires reuse_completed && !force && !refresh plus a usable file.
+bool allowsCompletedOutputReuse(const ConversionRequest& request);
+// Returns the completed-output result when the policy allows reuse and the output is usable.
+std::optional<ConversionResult> findReusableOutput(const ConversionRequest& request);
 
 ConversionResult processVideo(const ConversionRequest& request);
 ConversionResult processVideo(const std::string& url, const std::string& format);

@@ -31,6 +31,22 @@ bool envFlag(const char* name) {
     return value == "1" || value == "true" || value == "yes" || value == "on";
 }
 
+bool envBool(const char* name, bool fallback) {
+    std::string value = trimCopy(envOr(name, ""));
+    if (value.empty()) {
+        return fallback;
+    }
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (value == "1" || value == "true" || value == "yes" || value == "on") {
+        return true;
+    }
+    if (value == "0" || value == "false" || value == "no" || value == "off") {
+        return false;
+    }
+    throw Error(ErrorCode::ConfigError, std::string(name) + " must be 1 or 0");
+}
+
 int envInt(const char* name, int fallback, int minValue, int maxValue) {
     const std::string raw = trimCopy(envOr(name, ""));
     if (raw.empty()) {
@@ -172,6 +188,7 @@ Config loadConfigFromEnv() {
     config.allow_remote = envFlag("YTCONV_ALLOW_REMOTE");
     config.allow_unauthenticated_localhost = envFlag("YTCONV_ALLOW_UNAUTHENTICATED_LOCALHOST");
     config.log_urls = envFlag("YTCONV_LOG_URLS");
+    config.reuse_completed = envBool("YTCONV_REUSE_COMPLETED", config.reuse_completed);
     return config;
 }
 

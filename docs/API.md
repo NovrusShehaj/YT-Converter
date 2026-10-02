@@ -63,7 +63,34 @@ Required header when an API key is configured: `X-Api-Key`.
 }
 ```
 
-When the output file already exists and `reuse_completed` is enabled, the API returns 200 with `reused: true`. Otherwise it returns 202 `queued` and the conversion runs asynchronously.
+When the output file already exists and completed-output reuse applies, the API returns 200 with `reused: true`. Otherwise it returns 202 `queued` and the conversion runs asynchronously. The reuse `job_id` is informational; no job record is created for it.
+
+### Reuse, `force`, and `refresh`
+
+Optional boolean body fields `force` and `refresh` select the policy. One rule is used everywhere
+(HTTP fast path, queue, converter, CLI): completed-output reuse requires `YTCONV_REUSE_COMPLETED`
+(default on), `force=false`, `refresh=false`, and a usable output file.
+
+| Completed-output reuse enabled | `force` | `refresh` | Behavior |
+|---|---|---|---|
+| Yes | No | No | Reuse a valid completed output; otherwise encode from a fresh cached source or a new download |
+| Yes | Yes | No | Re-encode and replace the output; a fresh cached source is allowed |
+| Any | Any | Yes | Download a new source generation, then replace the output |
+| No | Any | No | Encode and publish again; a fresh cached source is allowed |
+
+`reused: true` means a completed output file satisfied the request, never merely that download
+bytes were shared. Replacements keep the previous output if the download or encode fails.
+
+Sharing and ordering rules:
+
+- Requests share an operation only with the same video, format, and policy class (reuse,
+  replace, refresh). A `refresh` shares only a refresh operation that has not started, and only
+  a download that started after the refresh was admitted, so it never reuses older bytes.
+- Writers to one output are serialized. Before publishing, a writer skips publication (and
+  reports the existing output with `reused: true`) when the output was built from a newer source
+  generation, or, for non-refresh replacements, when it was republished after this request was
+  admitted. An older operation therefore never overwrites a later refresh.
+- A job canceled before publication never creates new output.
 
 ### Job status
 
@@ -168,4 +195,5 @@ All responses include `Cache-Control: no-store`. There is no `Access-Control-All
 | `YTCONV_CACHE_DIR` | `<output>/cache/ytdlp` | yt-dlp metadata cache. A relative path is under the output root |
 | `YTCONV_SOURCE_CACHE_TTL_SEC` | `86400` | Reuse a downloaded source for this many seconds |
 | `YTCONV_SOURCE_CACHE_MAX_BYTES` | `10G` | Evict the oldest cached sources above this size |
+| `YTCONV_REUSE_COMPLETED` | `1` | `0` disables completed-output reuse (every request re-encodes) |
 | `YTCONV_SYNC_CONVERSIONS` | unset | `1` makes `POST /v1/conversions` block until the file is ready |

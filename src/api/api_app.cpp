@@ -431,24 +431,6 @@ class ApiServer::Impl {
         }
         const std::string videoId = parsed.video->id;
         const std::string normalizedFormat = yt::validation::requireFormat(format);
-        const fs::path outputRoot(resolveOutputRoot(config.output_dir));
-        const fs::path finalPath =
-            outputRoot / yt::converter::getOutputFilename(videoId, normalizedFormat);
-
-        if (config.reuse_completed && !force && !refresh && fs::exists(finalPath) &&
-            fs::file_size(finalPath) > 0) {
-            json::value ok;
-            ok[U("status")] = json::value::string(U("success"));
-            ok[U("error_code")] = json::value::string(U("ok"));
-            ok[U("message")] = json::value::string(U("Reused existing output"));
-            ok[U("output_path")] =
-                json::value::string(toT(fs::weakly_canonical(finalPath).string()));
-            ok[U("job_id")] = json::value::string(toT(videoId + "-" + normalizedFormat));
-            ok[U("reused")] = json::value::boolean(true);
-            ok[U("request_id")] = json::value::string(toT(requestId));
-            replyJson(request, 200, ok);
-            return;
-        }
 
         yt::converter::ConversionRequest conversion;
         conversion.url = url;
@@ -459,6 +441,20 @@ class ApiServer::Impl {
         conversion.refresh = refresh;
         conversion.show_progress = config.log_level != "ERROR";
         conversion.job_id = makeJobId(videoId, normalizedFormat);
+
+        // Same eligibility rule as the converter's own checks (see converter.h).
+        if (const auto reused = yt::converter::findReusableOutput(conversion)) {
+            json::value ok;
+            ok[U("status")] = json::value::string(U("success"));
+            ok[U("error_code")] = json::value::string(U("ok"));
+            ok[U("message")] = json::value::string(U("Reused existing output"));
+            ok[U("output_path")] = json::value::string(toT(reused->output_path));
+            ok[U("job_id")] = json::value::string(toT(videoId + "-" + normalizedFormat));
+            ok[U("reused")] = json::value::boolean(true);
+            ok[U("request_id")] = json::value::string(toT(requestId));
+            replyJson(request, 200, ok);
+            return;
+        }
 
         if (config.sync_conversions) {
             try {

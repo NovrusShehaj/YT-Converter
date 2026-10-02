@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -468,6 +469,64 @@ void logCompletion(const ConversionResult& result, const std::string& format) {
     yt::logger::Logger::getInstance().info(ss.str());
 }
 
+// Per-output publication record, written under the writer lock after each publication. It lets
+// a writer detect that a newer publication already satisfied its request.
+struct OutputRecord {
+    std::int64_t generation_stamp = 0; // download start of the source generation used
+    std::int64_t published_at = 0;     // when the output was renamed into place
+};
+
+fs::path outputRecordPath(const fs::path& outputRoot, const fs::path& finalPath) {
+    return outputRoot / "cache" / "outputs" / (finalPath.filename().string() + ".meta");
+}
+
+std::optional<OutputRecord> readOutputRecord(const fs::path& path) {
+    std::ifstream in(path);
+    if (!in) {
+        return std::nullopt;
+    }
+    OutputRecord record;
+    std::string line;
+    bool haveGeneration = false;
+    bool havePublished = false;
+    while (std::getline(in, line)) {
+        const auto eq = line.find('=');
+        if (eq == std::string::npos) {
+            continue;
+        }
+        try {
+            const std::int64_t value = std::stoll(line.substr(eq + 1));
+            if (line.compare(0, eq, "generation_stamp") == 0) {
+                record.generation_stamp = value;
+                haveGeneration = true;
+            } else if (line.compare(0, eq, "published_at") == 0) {
+                record.published_at = value;
+                havePublished = true;
+            }
+        } catch (const std::exception&) {
+            return std::nullopt;
+        }
+    }
+    if (!haveGeneration || !havePublished) {
+        return std::nullopt;
+    }
+    return record;
+}
+
+void writeOutputRecord(const fs::path& path, const OutputRecord& record) {
+    createPrivateDir(path.parent_path());
+    const fs::path temp = path.string() + "." + randomSuffix() + ".tmp";
+    {
+        std::ofstream out(temp, std::ios::trunc);
+        out << "generation_stamp=" << record.generation_stamp << '\n'
+            << "published_at=" << record.published_at << '\n';
+        if (!out) {
+            throw Error(ErrorCode::Internal, "Unable to write output record");
+        }
+    }
+    fs::rename(temp, path);
+}
+
 // Removes a partial output on every exit path unless it was renamed into place.
 struct PartialGuard {
     fs::path path;
@@ -491,6 +550,31 @@ struct CacheMaintenance {
 };
 
 } // namespace
+
+bool allowsCompletedOutputReuse(const ConversionRequest& request) {
+    return request.config.reuse_completed && !request.config.force && !request.refresh;
+}
+
+std::optional<ConversionResult> findReusableOutput(const ConversionRequest& request) {
+    if (!allowsCompletedOutputReuse(request)) {
+        return std::nullopt;
+    }
+    const std::string format = validation::requireFormat(request.format);
+    const validation::VideoRef video = validation::requireVideo(request.url);
+    const fs::path outputRoot = fs::path(resolveOutputRoot(request.config.output_dir));
+    const fs::path finalPath = outputRoot / getOutputFilename(video.id, format);
+    const std::uintmax_t size = usableSize(finalPath);
+    if (size == 0) {
+        return std::nullopt;
+    }
+    ConversionResult result;
+    result.output_path = fs::weakly_canonical(finalPath).string();
+    result.job_id = request.job_id;
+    result.video_id = video.id;
+    result.reused = true;
+    result.output_bytes = size;
+    return result;
+}
 
 void setFreeSpaceBytesForTests(std::optional<std::uintmax_t> bytes) {
     std::lock_guard<std::mutex> lock(g_freeSpaceMutex);
@@ -544,13 +628,12 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
         return result;
     };
 
-    if (request.config.reuse_completed && !request.config.force && !request.refresh &&
-        usableSize(finalPath) > 0) {
+    if (auto reused = findReusableOutput(request)) {
+        reused->job_id = request.job_id;
         yt::metrics::recordStart();
-        ConversionResult reused = completedOutput(true, 0);
-        yt::metrics::recordSuccess(reused.output_bytes, 0, 0, 0);
-        logCompletion(reused, request.format);
-        return reused;
+        yt::metrics::recordSuccess(reused->output_bytes, 0, 0, 0);
+        logCompletion(*reused, request.format);
+        return *reused;
     }
 
     const bool audioOnly = request.format == "mp3" || request.format == "wav";
@@ -589,11 +672,29 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
             throw Error(ErrorCode::Timeout, "Timed out waiting for another writer of this output");
         }
 
-        if (!request.config.force && usableSize(finalPath) > 0) {
+        // Decide under the writer lock whether this request still needs to publish:
+        //  - an output another writer completed meanwhile satisfies an ordinary request;
+        //  - output built from a newer source generation is never replaced by an older one;
+        //  - a non-refresh replacement is satisfied by any publication after its admission.
+        // A refresh carries a generation that started after its admission, so it publishes
+        // unless an even newer generation is already published.
+        const fs::path recordPath = outputRecordPath(outputRoot, finalPath);
+        const std::uintmax_t existingBytes = usableSize(finalPath);
+        const auto record = existingBytes > 0 ? readOutputRecord(recordPath) : std::nullopt;
+        const bool satisfiedByExisting =
+            existingBytes > 0 &&
+            (allowsCompletedOutputReuse(request) ||
+             (record && record->generation_stamp > lease->stamp()) ||
+             (record && !request.refresh && record->published_at >= request.admitted_at));
+        if (satisfiedByExisting) {
             ConversionResult ready = completedOutput(true, source.download_ms);
+            ready.superseded = !allowsCompletedOutputReuse(request);
             ready.source_bytes = lease->bytes();
             ready.bytes_downloaded = lease->bytes();
             ready.source_generation = lease->generation();
+            ready.source_cache_hit = source.cache_hit;
+            ready.shared_download = source.shared;
+            ready.downloaded = source.downloaded;
             yt::metrics::recordSuccess(ready.output_bytes, source.download_ms, 0, lease->bytes());
             logCompletion(ready, request.format);
             return ready;
@@ -612,8 +713,10 @@ ConversionResult processVideo(const ConversionRequest& rawRequest) {
                 throw Error(ErrorCode::ConversionFailed, "ffmpeg produced an empty output file");
             }
         }
+        // A job canceled before publication never creates new output.
         throwIfCanceled(request);
         fs::rename(partial.path, finalPath);
+        writeOutputRecord(recordPath, OutputRecord{lease->stamp(), cache::nowStamp()});
 
         ConversionResult result = completedOutput(false, source.download_ms);
         result.convert_ms = convertMs;

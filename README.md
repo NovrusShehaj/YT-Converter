@@ -85,7 +85,8 @@ Examples:
 | `--output-dir DIR` | Finished files go here (default `./output`) |
 | `--format FMT` | `mp3`, `mp4`, or `wav` |
 | `--quality N` | Max mp4 height (default 1080) |
-| `--force` | Replace an existing `<id>.<fmt>` |
+| `--force` | Re-encode and replace `<id>.<fmt>` (a fresh cached source is allowed) |
+| `--refresh` | Download a new source, then replace `<id>.<fmt>` |
 | `--no-unicode` | ASCII status markers |
 | `-v` / `-q` | Debug or errors-only logging |
 
@@ -183,6 +184,7 @@ Environment variables (see `.env.example`; `.env` files are not loaded automatic
 | `YTCONV_FRAGMENT_RETRIES` | `10` | yt-dlp fragment retries |
 | `YTCONV_READY_TTL_SEC` | `60` | Readiness probe cache TTL |
 | `YTCONV_CACHE_DIR` | `<output>/cache/ytdlp` | yt-dlp metadata cache. A relative path is under the output root |
+| `YTCONV_REUSE_COMPLETED` | `1` | `0` re-encodes even when the output exists |
 | `YTCONV_YT_DLP` / `YTCONV_FFMPEG` | `yt-dlp` / `ffmpeg` | Binary paths (tests use fakes) |
 | `YTCONV_API_KEY` | empty | Required for remote bind |
 | `YTCONV_ALLOW_REMOTE` | unset | Must be `1` to bind all interfaces |
