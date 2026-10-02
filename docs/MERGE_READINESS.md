@@ -32,7 +32,7 @@ Test inventory at the verified commit: 99 core tests (`yt-converter-tests`), 5 r
 | Clean checkout | **Verified locally** | `git archive HEAD` into a different absolute directory, then configure in `build/` and build Debug and Release with `BUILD_API=ON`. Both build, and `ctest` passes 6/6 in each. `git ls-files` contains no `build/`, `CMakeCache.txt`, or `CMakeFiles/` entries. |
 | Missing cpprestsdk | **Verified locally** | `cmake -DBUILD_API=ON -DCMAKE_DISABLE_FIND_PACKAGE_cpprestsdk=ON` fails with "BUILD_API=ON requires cpprestsdk". `-DBUILD_API=OFF` builds the CLI. |
 | Core and API, Linux | **Verified locally** | Debug and Release with `BUILD_API=ON`; HTTP tests built as `yt-converter-api-tests` and executed (25/25). The full suite also passed 3 consecutive repeats (`ctest --repeat until-fail:3`, Release `-Werror`). |
-| Core and API, macOS | **Pending CI** | Not runnable here. Homebrew's `cpprestsdk` 2.10.19 is bottled for current macOS but deprecated (upstream archived) and depends on Boost 1.92. The CI `build` job on `macos-latest` is the evidence. |
+| Core and API, macOS | **Failed CI run 1 (compile); fix pending CI** | Not runnable here. Homebrew's `cpprestsdk` 2.10.19 is bottled for current macOS but deprecated (upstream archived) and depends on Boost 1.92. The CI `build` job on `macos-latest` is the evidence. |
 | Formatting | **Verified locally** | `.clang-format` parses (`--dump-config`); `clang-format 18.1.8 --dry-run -Werror` passes on every tracked C++ file. |
 | Compiler warnings | **Verified locally** | GCC and Clang Debug builds with `-DYTCONV_WERROR=ON` (API and tests) succeed. |
 | Static analysis | **Verified locally** | `clang-tidy -p build` over `src/*.cpp` with the checked-in `.clang-tidy` (all findings are errors): 0 findings. CI uses Ubuntu's clang-tidy. cppcheck and flawfinder are advisory only. |
@@ -44,7 +44,7 @@ Test inventory at the verified commit: 99 core tests (`yt-converter-tests`), 5 r
 | Shutdown | **Verified locally** | `JobQueueTest.ShutdownCancelsEverythingAndJoinsPromptly` (callbacks once, children reaped, late submits rejected), `SyncApiTest.ShutdownResolvesOutstandingSyncResponses`, `GateTest.ShutdownClosesHalfReadRequests`, container SIGTERM check. |
 | Metrics (finding 11) | **Verified locally** | `MetricsTest.*`: exact counter deltas against fixture sizes for cold, warm, reused, shared, failed-encode, canceled, and refresh scenarios; gauges return to zero. |
 | Readiness (finding 12) | **Verified locally** | `ReadinessTest.*` and `ApiTest.ReadinessRecovers*`: a launch failure forces a re-probe inside the TTL, a restored tool recovers, per-configuration keys, coalesced probes, zero TTL, invalidation during a blocked probe. Each rule was mutated and its test failed. |
-| Docker image (finding 3) | **Partially verified locally; pending CI** | No Docker daemon access here. Both Dockerfile stages were reproduced in an official `debian:bookworm-slim` rootfs under an unprivileged user namespace (`bwrap`). The builder (GCC 12.2, CMake 3.25.1, `make` explicitly installed) builds without warnings. `collect-runtime-packages.sh` yields `libbrotli1 libc6 libcpprest2.10 libgcc-s1 libssl3 libstdc++6 zlib1g`, and `verify-runtime.sh` passes (no unresolved libraries, no compiler). `in-container-checks.sh` passes as UID 10001 with networking unshared: CLI and API startup, health/readiness, a fake conversion (202, then succeeded), 401 without the key, authorized cancellation, clean SIGTERM. The only deviation from a real build: dpkg's `chown` to group `staff` cannot work in a single-UID namespace, so `chown` was masked during package configuration. The image `HEALTHCHECK`, `docker run` with the default entrypoint, and Compose (`tests/container/smoke.sh`, `compose-smoke.sh`) need Docker and run in the required CI `container` job. |
+| Docker image (finding 3) | **Verified on CI** (run 1); reproduced locally | No Docker daemon access here. Both Dockerfile stages were reproduced in an official `debian:bookworm-slim` rootfs under an unprivileged user namespace (`bwrap`). The builder (GCC 12.2, CMake 3.25.1, `make` explicitly installed) builds without warnings. `collect-runtime-packages.sh` yields `libbrotli1 libc6 libcpprest2.10 libgcc-s1 libssl3 libstdc++6 zlib1g`, and `verify-runtime.sh` passes (no unresolved libraries, no compiler). `in-container-checks.sh` passes as UID 10001 with networking unshared: CLI and API startup, health/readiness, a fake conversion (202, then succeeded), 401 without the key, authorized cancellation, clean SIGTERM. The only deviation from a real build: dpkg's `chown` to group `staff` cannot work in a single-UID namespace, so `chown` was masked during package configuration. The image `HEALTHCHECK`, `docker run` with the default entrypoint, and Compose (`tests/container/smoke.sh`, `compose-smoke.sh`) need Docker and run in the required CI `container` job. |
 | Sanitizers | **Verified locally** | ASan+UBSan (leak detection on), full suite including API: 6/6. One UBSan `vptr` report inside cpprestsdk's own `bytestream::open_istream` is suppressed by `tests/sanitizers/ubsan.supp` (cpprest's `Concurrency` namespace only). TSan on the core (queue, single-flight, cache, process, metrics, reuse policy): 5/5, no reports. |
 | Windows | **Not supported; unverified** | The API's request gate is POSIX-only, and the Windows paths in `process.cpp` and `file_lock.cpp` are not compiled or tested anywhere. README and ARCHITECTURE state this. |
 | Timing | **Pending manual run** | `.github/workflows/integration.yml` (manual dispatch only) logs `download_ms`, `convert_ms`, `source_bytes`, `output_bytes`, and the matching metrics, and checks for a non-empty output. It was not run; PR tests make no YouTube requests. |
@@ -58,6 +58,21 @@ and media tests in `ctest -N`, `YTCONV_REQUIRE_MEDIA_TESTS=1`), `clean-checkout`
 `clang-format`, `no-shell-spawn`, `clang-tidy`, and `compiler-warnings` (GCC and Clang
 `-Werror`), all required by `quality-summary`. These were not run for this commit because the
 branch has not been pushed.
+
+## CI run 1 (`bd17842`, run 36952345810 / 36952345821)
+
+Passed on GitHub Actions: Ubuntu Debug and Release builds with API, API, and media tests; the
+clean-checkout gate; the **container job** (real `docker build`, the image smoke test as UID 10001
+with the `HEALTHCHECK`, and the Compose test); clang-format; compiler warnings; no-shell-spawn.
+
+Failed, and fixed in the following commit:
+
+| Job | Cause | Fix and local reproduction |
+|---|---|---|
+| macOS Debug/Release | `SOCK_CLOEXEC` (and `MSG_NOSIGNAL`/`accept4`) do not exist on macOS | Portable socket helpers (`fcntl` close-on-exec, `SO_NOSIGPIPE`); `/bin/true` test path. Every source and test now compiles with clang 18 + libc++ `-Werror` (approximating Apple's headers). macOS itself is still only verifiable on CI. |
+| Sanitizers (both) | Test race: `CancelingMp3KeepsTheDownloadAWavJobShares` treated "WAV running" as "WAV joined the download". On the slower runner the MP3 cancel came first, so the download correctly had no remaining subscriber. | Tests wait on `sharedDownloadWaitersForTests()`. Reproduced by injecting a 500 ms delay before the join: the old test (and a latent `MetricsTest` twin) fails, the new ones pass. ASan/UBSan and TSan pass in an Ubuntu 24.04 rootfs (GCC 13, cpprest 2.10.19; TSan with ASLR off for this host kernel). |
+| clang-tidy | clang-tidy 18 reports `bugprone-unchecked-optional-access` after an explicit check (newer versions do not) | The optional was removed. Clean with Ubuntu's clang-tidy 18.1.3 in a 24.04 rootfs, the CI tool. |
+| cppcheck (advisory) | Two performance findings | Fixed (`const&` parameter, `resize` instead of `substr`) |
 
 ## Commits
 

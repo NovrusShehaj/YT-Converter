@@ -80,13 +80,13 @@ int64_t parseHumanSize(const std::string& value) {
         std::string suffix = v.substr(v.size() - 2);
         if (suffix == "kb") {
             multiplier = 1000;
-            v = v.substr(0, v.size() - 2);
+            v.resize(v.size() - 2);
         } else if (suffix == "mb") {
             multiplier = 1000 * 1000;
-            v = v.substr(0, v.size() - 2);
+            v.resize(v.size() - 2);
         } else if (suffix == "gb") {
             multiplier = 1000 * 1000 * 1000;
-            v = v.substr(0, v.size() - 2);
+            v.resize(v.size() - 2);
         }
     }
     // Then check for single-character suffixes (K, M, G)

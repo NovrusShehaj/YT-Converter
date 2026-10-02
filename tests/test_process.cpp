@@ -119,7 +119,8 @@ TEST(Process, LargeStdoutCompletesWithoutTimeout) {
 }
 
 TEST(Process, TrueUtilityExitsZero) {
-    const auto result = yt::process::run({"/bin/true"});
+    // PATH lookup: macOS has /usr/bin/true, not /bin/true.
+    const auto result = yt::process::run({"true"});
     EXPECT_EQ(result.exit_code, 0);
 }
 

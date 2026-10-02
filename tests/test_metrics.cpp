@@ -191,7 +191,8 @@ TEST_F(MetricsTest, Mp3AndWavShareOneDownloadMeasurement) {
     queue.submit(request("mp3"), kVideo, "mp3");
     ASSERT_TRUE(waitUntil([&] { return !gateStartedPids(gate_).empty(); }));
     queue.submit(request("wav"), kVideo, "wav");
-    ASSERT_TRUE(waitUntil([&] { return queue.find("wav")->state == JobState::Running; }));
+    // The WAV operation must have joined the download before it is released.
+    ASSERT_TRUE(waitUntil([] { return yt::converter::sharedDownloadWaitersForTests() == 1; }));
     openGate(gate_);
     ASSERT_TRUE(waitTerminal(queue, "mp3"));
     ASSERT_TRUE(waitTerminal(queue, "wav"));

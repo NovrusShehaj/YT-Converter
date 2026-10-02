@@ -10,6 +10,7 @@
 #include "validation.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cstdint>
@@ -49,6 +50,8 @@ DownloadGroup& downloadFlights() {
     static DownloadGroup group;
     return group;
 }
+
+std::atomic<int> g_sharedDownloadWaiters{0};
 
 std::string randomSuffix() {
     std::random_device device;
@@ -385,7 +388,18 @@ SourceAcquisition acquireSource(const ConversionRequest& request, const validati
     auto& flights = downloadFlights();
     const auto membership = flights.join(key, request.cancel, minStamp, cache::nowStamp());
     if (!membership.is_leader) {
-        if (!flights.wait(membership.flight, request.cancel)) {
+        struct WaiterCount {
+            WaiterCount() { g_sharedDownloadWaiters.fetch_add(1); }
+            ~WaiterCount() { g_sharedDownloadWaiters.fetch_sub(1); }
+            WaiterCount(const WaiterCount&) = delete;
+            WaiterCount& operator=(const WaiterCount&) = delete;
+        };
+        bool finished = false;
+        {
+            const WaiterCount waiting; // after join(): this operation's interest is registered
+            finished = flights.wait(membership.flight, request.cancel);
+        }
+        if (!finished) {
             throw Error(ErrorCode::Canceled, "Conversion canceled while waiting for a download");
         }
         const auto& flight = *membership.flight;
@@ -585,6 +599,10 @@ std::optional<ConversionResult> findReusableOutput(const ConversionRequest& requ
     result.reused = true;
     result.output_bytes = size;
     return result;
+}
+
+int sharedDownloadWaitersForTests() {
+    return g_sharedDownloadWaiters.load();
 }
 
 void setFreeSpaceBytesForTests(std::optional<std::uintmax_t> bytes) {

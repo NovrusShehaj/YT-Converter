@@ -442,11 +442,13 @@ void Queue::workerLoop() {
             }
         };
 
-        std::optional<converter::ConversionResult> conversion;
+        converter::ConversionResult conversion;
+        bool succeeded = false;
         ErrorCode code = ErrorCode::Ok;
         std::string message;
         try {
             conversion = converter::processVideo(request);
+            succeeded = true;
         } catch (const Error& error) {
             code = error.code();
             message = error.message();
@@ -472,10 +474,10 @@ void Queue::workerLoop() {
                 if (it == jobs_.end()) {
                     continue;
                 }
-                if (conversion) {
-                    finalizeLocked(id, it->second, JobState::Succeeded, &*conversion, ErrorCode::Ok,
-                                   conversion->reused ? "Reused existing output"
-                                                      : "Conversion completed",
+                if (succeeded) {
+                    finalizeLocked(id, it->second, JobState::Succeeded, &conversion, ErrorCode::Ok,
+                                   conversion.reused ? "Reused existing output"
+                                                     : "Conversion completed",
                                    notifications);
                 } else if (code == ErrorCode::Canceled) {
                     finalizeLocked(id, it->second, JobState::Canceled, nullptr, code, "Canceled",

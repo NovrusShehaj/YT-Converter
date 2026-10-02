@@ -631,12 +631,20 @@ TEST_F(SyncApiTest, ShutdownResolvesOutstandingSyncResponses) {
 #include <sys/socket.h>
 #include <unistd.h>
 
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0 // macOS: SO_NOSIGPIPE is set on the socket instead
+#endif
+
 namespace {
 
 class RawClient {
   public:
     explicit RawClient(int port) {
         fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+#ifdef SO_NOSIGPIPE
+        const int one = 1;
+        ::setsockopt(fd_, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#endif
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(static_cast<std::uint16_t>(port));

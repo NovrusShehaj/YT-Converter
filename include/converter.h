@@ -67,6 +67,9 @@ ConversionResult processVideo(const ConversionRequest& request);
 ConversionResult processVideo(const std::string& url, const std::string& format);
 std::string getOutputFilename(const std::string& videoID, const std::string& format);
 void setFreeSpaceBytesForTests(std::optional<std::uintmax_t> bytes);
+// Test instrumentation: operations that have joined another operation's in-flight download and
+// are waiting for it. A test waits on this to know a subscriber's interest is registered.
+int sharedDownloadWaitersForTests();
 
 } // namespace yt::converter
 

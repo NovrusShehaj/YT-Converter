@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <map>
@@ -196,7 +197,8 @@ TEST_F(JobQueueTest, CancelingMp3KeepsTheDownloadAWavJobShares) {
     ASSERT_EQ(queue.submit(request(kVideoA, "mp3"), kVideoA, "mp3-job").kind, SubmitKind::Queued);
     ASSERT_TRUE(waitUntil([&] { return gateStartedPids(downloadGate_).size() == 1; }));
     ASSERT_EQ(queue.submit(request(kVideoA, "wav"), kVideoA, "wav-job").kind, SubmitKind::Queued);
-    ASSERT_TRUE(waitState(queue, "wav-job", JobState::Running));
+    // Running is not enough: wait until the WAV operation has joined the shared download.
+    ASSERT_TRUE(waitUntil([] { return yt::converter::sharedDownloadWaitersForTests() == 1; }));
 
     EXPECT_EQ(queue.cancel("mp3-job"), yt::jobs::CancelResult::Canceled);
     // The download child must keep running for the WAV subscriber.
@@ -221,7 +223,7 @@ TEST_F(JobQueueTest, CancelingAWaitingWavReturnsPromptly) {
     ASSERT_EQ(queue.submit(request(kVideoA, "mp3"), kVideoA, "mp3-job").kind, SubmitKind::Queued);
     ASSERT_TRUE(waitUntil([&] { return gateStartedPids(downloadGate_).size() == 1; }));
     ASSERT_EQ(queue.submit(request(kVideoA, "wav"), kVideoA, "wav-job").kind, SubmitKind::Queued);
-    ASSERT_TRUE(waitState(queue, "wav-job", JobState::Running));
+    ASSERT_TRUE(waitUntil([] { return yt::converter::sharedDownloadWaitersForTests() == 1; }));
 
     const auto started = std::chrono::steady_clock::now();
     EXPECT_EQ(queue.cancel("wav-job"), yt::jobs::CancelResult::Canceled);

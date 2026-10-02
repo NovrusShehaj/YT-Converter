@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>

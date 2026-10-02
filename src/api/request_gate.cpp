@@ -33,7 +33,7 @@ namespace yt::api {
 
 // The gate is POSIX-only. On Windows the API is unsupported (see docs/ARCHITECTURE.md).
 struct RequestGate::Impl {};
-RequestGate::RequestGate(GateLimits, std::string) : impl_(std::make_unique<Impl>()) {}
+RequestGate::RequestGate(const GateLimits&, std::string) : impl_(std::make_unique<Impl>()) {}
 RequestGate::~RequestGate() = default;
 void RequestGate::bind(const std::string&, int) {
     throw Error(ErrorCode::ConfigError, "The HTTP API is not supported on Windows");
@@ -66,10 +66,36 @@ void closeFd(int& fd) {
     }
 }
 
+// macOS has neither SOCK_CLOEXEC/accept4 nor MSG_NOSIGNAL. There, close-on-exec is set with
+// fcntl right after the socket is created, and SIGPIPE is suppressed per socket with
+// SO_NOSIGPIPE.
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
 void setNonBlocking(int fd) {
     const int flags = ::fcntl(fd, F_GETFL, 0);
     ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+#ifdef SO_NOSIGPIPE
+    const int one = 1;
+    ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#endif
+}
+
+int openSocket(int family, int type, int protocol) {
+#ifdef SOCK_CLOEXEC
+    type |= SOCK_CLOEXEC;
+#endif
+    return ::socket(family, type, protocol);
+}
+
+int acceptSocket(int listenFd, sockaddr* addr, socklen_t* len) {
+#ifdef __linux__
+    return ::accept4(listenFd, addr, len, SOCK_CLOEXEC);
+#else
+    return ::accept(listenFd, addr, len);
+#endif
 }
 
 std::string lower(std::string value) {
@@ -197,7 +223,8 @@ struct RequestGate::Impl {
     }
 };
 
-RequestGate::RequestGate(GateLimits limits, std::string secret) : impl_(std::make_unique<Impl>()) {
+RequestGate::RequestGate(const GateLimits& limits, std::string secret)
+    : impl_(std::make_unique<Impl>()) {
     impl_->limits = limits;
     impl_->secret = std::move(secret);
 }
@@ -222,7 +249,7 @@ void RequestGate::bind(const std::string& host, int port) {
     }
     int fd = -1;
     for (addrinfo* ai = results; ai != nullptr; ai = ai->ai_next) {
-        fd = ::socket(ai->ai_family, ai->ai_socktype | SOCK_CLOEXEC, ai->ai_protocol);
+        fd = openSocket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd < 0) {
             continue;
         }
@@ -307,7 +334,7 @@ void RequestGate::Impl::acceptAll() {
     while (true) {
         sockaddr_storage addr{};
         socklen_t len = sizeof(addr);
-        const int fd = ::accept(listenFd, reinterpret_cast<sockaddr*>(&addr), &len);
+        const int fd = acceptSocket(listenFd, reinterpret_cast<sockaddr*>(&addr), &len);
         if (fd < 0) {
             if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
                 acceptPausedUntil = Clock::now() + std::chrono::milliseconds(100);
@@ -415,7 +442,7 @@ void RequestGate::Impl::forward(Connection& conn) {
     conn.body.shrink_to_fit();
     conn.headers.clear();
 
-    conn.upstream = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    conn.upstream = openSocket(AF_INET, SOCK_STREAM, 0);
     if (conn.upstream < 0) {
         reject(conn, 503, "Service Unavailable", "Internal listener unavailable");
         return;
@@ -886,7 +913,7 @@ void RequestGate::Impl::loop() {
 }
 
 int findFreeLoopbackPort() {
-    const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    const int fd = openSocket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
         throw Error(ErrorCode::Internal, "Cannot create a socket");
     }

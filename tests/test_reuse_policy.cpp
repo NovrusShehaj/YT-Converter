@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -331,8 +332,8 @@ TEST_F(ReusePolicyTest, RefreshSharesADownloadThatStartedAfterItsAdmission) {
     second.refresh = true;
     second.admitted_at = admitted; // admitted before the first download started
     AsyncConversion follower(second, gate_);
-    // While the download is parked the follower cannot finish unless it started its own.
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    // The follower joins the parked download rather than starting its own.
+    ASSERT_TRUE(waitUntil([] { return yt::converter::sharedDownloadWaitersForTests() == 1; }));
     EXPECT_FALSE(follower.done());
     follower.join();
     leader.join();

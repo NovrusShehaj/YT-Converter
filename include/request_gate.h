@@ -42,7 +42,7 @@ constexpr const char* kGatePeerHeader = "X-Ytconv-Peer";
 
 class RequestGate {
   public:
-    RequestGate(GateLimits limits, std::string secret);
+    RequestGate(const GateLimits& limits, std::string secret);
     ~RequestGate();
     RequestGate(const RequestGate&) = delete;
     RequestGate& operator=(const RequestGate&) = delete;
