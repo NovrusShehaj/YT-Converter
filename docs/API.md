@@ -180,6 +180,32 @@ work later succeeds. A second `DELETE` of a finished job returns 409.
 
 `GET /v1/conversions` returns 405 and `Allow: POST`.
 
+## Request limits
+
+Request intake is bounded before any application code runs:
+
+- Decoded request bodies are limited to 8,192 bytes, with or without `Content-Length`. A valid
+  `Content-Length` above the limit is rejected with 400 before the body is read; a chunked body
+  is rejected with 400 as soon as its decoded size would exceed the limit. Invalid or
+  conflicting framing (non-numeric or duplicate `Content-Length`, `Content-Length` with
+  `Transfer-Encoding`, encodings other than `chunked`, malformed chunks) returns 400. Request
+  headers over 16 KiB return 431.
+- The whole request (headers and body) must arrive within `YTCONV_REQUEST_READ_TIMEOUT_SEC`
+  (default 10, separate from conversion timeouts); otherwise 408 and the connection is closed.
+- At most `YTCONV_MAX_PENDING_READS` (default 32) connections may still be sending a request and
+  at most `YTCONV_MAX_CONNECTIONS` (default 128) may be open, including ones waiting for a
+  synchronous response; beyond that new connections get 503.
+- Each connection carries one request (`Connection: close`). Oversized input is not drained to
+  keep the connection alive; the server answers, discards at most 64 KiB for 0.5 s so the client
+  can read the answer, and closes.
+
+Why a gate: cpprestsdk's asio listener (checked in 2.10.18, the version Debian ships) reads every
+request body, `Content-Length` or chunked, into an in-memory buffer independently of the handler
+and has no read timeout, so a size check in the handler cannot bound memory. The API therefore
+owns the public socket with a small in-process gate that enforces the limits above and forwards
+only validated, `Content-Length`-framed requests to cpprest on a private loopback port. Requests
+reaching that port without the gate's per-process secret are rejected with 403.
+
 ## Probes
 
 `GET /v1/healthz` → `{"status":"ok"}`
@@ -207,5 +233,8 @@ All responses include `Cache-Control: no-store`. There is no `Access-Control-All
 | `YTCONV_CACHE_DIR` | `<output>/cache/ytdlp` | yt-dlp metadata cache. A relative path is under the output root |
 | `YTCONV_SOURCE_CACHE_TTL_SEC` | `86400` | Reuse a downloaded source for this many seconds |
 | `YTCONV_SOURCE_CACHE_MAX_BYTES` | `10G` | Evict the oldest cached sources above this size |
+| `YTCONV_REQUEST_READ_TIMEOUT_SEC` | `10` | Time allowed to receive a whole request |
+| `YTCONV_MAX_PENDING_READS` | `32` | Connections still sending their request |
+| `YTCONV_MAX_CONNECTIONS` | `128` | Open client connections (must be ≥ pending reads) |
 | `YTCONV_REUSE_COMPLETED` | `1` | `0` disables completed-output reuse (every request re-encodes) |
 | `YTCONV_SYNC_CONVERSIONS` | unset | `1` keeps the `POST /v1/conversions` response open until the job finishes |

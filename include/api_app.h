@@ -2,6 +2,7 @@
 #define YT_CONVERTER_API_APP_H
 
 #include "config.h"
+#include "request_gate.h"
 
 #include <memory>
 #include <string>
@@ -22,6 +23,10 @@ class ApiServer {
     bool isRunning() const;
     std::string listenUrl() const;
     int port() const;
+    // Request-intake counters from the gate (test instrumentation and diagnostics).
+    GateStats requestStats() const;
+    // Port of the private loopback listener behind the gate (tests only).
+    int internalPortForTests() const;
 
   private:
     class Impl;

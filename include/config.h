@@ -21,6 +21,10 @@ struct Config {
     // Retained terminal job snapshots and their lifetime after completion or cancellation.
     int job_history_max = 1024;
     int job_history_ttl_sec = 3600;
+    // HTTP request intake (enforced by the request gate in front of the listener).
+    int request_read_timeout_sec = 10;
+    int max_pending_reads = 32;
+    int max_connections = 128;
     int child_timeout_sec = 900;
     int download_timeout_sec = 600;
     int convert_timeout_sec = 300;

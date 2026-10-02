@@ -104,7 +104,10 @@ target_link_libraries(yt2mp3-cli PRIVATE yt-converter-core)
 install(TARGETS yt2mp3-cli RUNTIME DESTINATION bin)
 
 if(BUILD_API)
-    add_library(yt-converter-api STATIC ${YTCONV_SRC_DIR}/api/api_app.cpp)
+    add_library(yt-converter-api STATIC
+        ${YTCONV_SRC_DIR}/api/api_app.cpp
+        ${YTCONV_SRC_DIR}/api/request_gate.cpp
+    )
     target_link_libraries(yt-converter-api
         PUBLIC
             yt-converter-core

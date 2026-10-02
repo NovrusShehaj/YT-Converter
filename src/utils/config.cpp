@@ -149,6 +149,15 @@ Config loadConfigFromEnv() {
     config.job_history_max = envInt("YTCONV_JOB_HISTORY_MAX", config.job_history_max, 0, 100000);
     config.job_history_ttl_sec =
         envInt("YTCONV_JOB_HISTORY_TTL_SEC", config.job_history_ttl_sec, 1, 7 * 86400);
+    config.request_read_timeout_sec =
+        envInt("YTCONV_REQUEST_READ_TIMEOUT_SEC", config.request_read_timeout_sec, 1, 300);
+    config.max_pending_reads =
+        envInt("YTCONV_MAX_PENDING_READS", config.max_pending_reads, 1, 1024);
+    config.max_connections = envInt("YTCONV_MAX_CONNECTIONS", config.max_connections, 1, 4096);
+    if (config.max_connections < config.max_pending_reads) {
+        throw Error(ErrorCode::ConfigError,
+                    "YTCONV_MAX_CONNECTIONS must be at least YTCONV_MAX_PENDING_READS");
+    }
     if (config.max_active_jobs < config.queue_depth) {
         throw Error(ErrorCode::ConfigError,
                     "YTCONV_MAX_ACTIVE_JOBS must be at least YTCONV_QUEUE_DEPTH, because every "

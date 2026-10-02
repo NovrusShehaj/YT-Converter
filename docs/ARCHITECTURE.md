@@ -60,6 +60,12 @@ Requests of the same video, format, and policy class (`reuse`, `replace`, or `re
 
 `SIGINT` and `SIGTERM` stop the listener and cancel tracked children. New conversions after shutdown return 503. High-frequency probes use `/v1/healthz`. `/v1/readyz` caches tool checks for `YTCONV_READY_TTL_SEC`.
 
+## HTTP intake
+
+`src/api/request_gate.cpp` owns the public socket. One poll-based thread reads each request with fixed limits (16 KiB of headers, 8 KiB of decoded body, `Content-Length` or chunked), a whole-request deadline, and caps on pending reads and open connections, then forwards the normalized request (`Content-Length`, `Connection: close`, a per-process secret, and the peer address) to cpprest's listener on a random loopback port. Responses are relayed back with a bounded buffer. This exists because cpprestsdk's asio listener buffers whole bodies itself and has no read timeout. The handler still reads the body asynchronously with its own 8,193-byte bound and never blocks a listener thread; shutdown resolves outstanding responses, closes the internal listener, waits for body-read continuations, and then closes the gate (dropping half-read requests).
+
+The gate is POSIX-only. The API is not supported on Windows; the Windows process path in `process.cpp` is unverified.
+
 ## Configuration and security defaults
 
 Config is environment (`YTCONV_*`) plus a few CLI flags. Default bind is loopback. Wildcard bind requires `YTCONV_ALLOW_REMOTE=1` and `YTCONV_API_KEY`. Conversion is POST-only. Logger is mutex-protected; INFO logs IDs, not URLs, unless `YTCONV_LOG_URLS=1` at DEBUG.

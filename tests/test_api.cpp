@@ -619,3 +619,277 @@ TEST_F(SyncApiTest, ShutdownResolvesOutstandingSyncResponses) {
     EXPECT_EQ(response.status_code(), status_codes::ServiceUnavailable);
     server_.reset();
 }
+
+// ---------------------------------------------------------------------------------------------
+// Request bodies (finding 9): bounded reads at the listener boundary, including chunked and slow
+// input. Raw sockets make partial and malformed traffic possible.
+
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+namespace {
+
+class RawClient {
+  public:
+    explicit RawClient(int port) {
+        fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(static_cast<std::uint16_t>(port));
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        connected_ = ::connect(fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0;
+    }
+    ~RawClient() { close(); }
+    RawClient(const RawClient&) = delete;
+    RawClient& operator=(const RawClient&) = delete;
+
+    bool connected() const { return connected_; }
+
+    bool send(const std::string& data) {
+        std::size_t sent = 0;
+        while (sent < data.size()) {
+            const ssize_t n = ::send(fd_, data.data() + sent, data.size() - sent, MSG_NOSIGNAL);
+            if (n <= 0) {
+                return false;
+            }
+            sent += static_cast<std::size_t>(n);
+        }
+        return true;
+    }
+
+    // Reads until the peer closes or the timeout passes.
+    std::string readAll(std::chrono::milliseconds timeout, bool* closed = nullptr) {
+        std::string data;
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            pollfd pfd{fd_, POLLIN, 0};
+            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  deadline - std::chrono::steady_clock::now())
+                                  .count();
+            if (::poll(&pfd, 1, static_cast<int>(std::max<long long>(1, left))) <= 0) {
+                continue;
+            }
+            char buffer[4096];
+            const ssize_t n = ::recv(fd_, buffer, sizeof(buffer), 0);
+            if (n <= 0) {
+                if (closed != nullptr) {
+                    *closed = true;
+                }
+                return data;
+            }
+            data.append(buffer, static_cast<std::size_t>(n));
+        }
+        return data;
+    }
+
+    void close() {
+        if (fd_ >= 0) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+    }
+
+  private:
+    int fd_ = -1;
+    bool connected_ = false;
+};
+
+int statusOf(const std::string& response) {
+    if (response.rfind("HTTP/1.1 ", 0) != 0 || response.size() < 12) {
+        return 0;
+    }
+    return std::stoi(response.substr(9, 3));
+}
+
+std::string jsonOfSize(std::size_t size) {
+    std::string json = R"({"url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","format":"mp3")";
+    json += std::string(size - json.size() - 1, ' ');
+    json += "}";
+    return json;
+}
+
+std::string postHead(const std::string& extraHeaders) {
+    return "POST /v1/conversions HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+           "Content-Type: application/json\r\n" +
+           extraHeaders + "\r\n";
+}
+
+} // namespace
+
+class GateTest : public ApiTest {
+  protected:
+    void SetUp() override {
+        ApiTest::SetUp();
+        setenv("YTCONV_YTDLP_GATE_DIR", makeTestDir().string().c_str(), 1);
+        auto config = baseConfig();
+        config.request_read_timeout_sec = 1;
+        config.max_pending_reads = 4;
+        config.max_connections = 16;
+        restartServer(config);
+        port_ = std::stoi(base_.substr(base_.rfind(':') + 1));
+    }
+
+    void TearDown() override {
+        unsetenv("YTCONV_YTDLP_GATE_DIR");
+        ApiTest::TearDown();
+    }
+
+    std::string exchange(const std::string& request,
+                         std::chrono::milliseconds timeout = std::chrono::seconds(5)) {
+        RawClient client(port_);
+        EXPECT_TRUE(client.connected());
+        client.send(request);
+        return client.readAll(timeout);
+    }
+
+    bool nothingEnqueued() {
+        auto metrics = this->request(methods::GET, "/v1/metrics").extract_json().get();
+        return metrics.at(U("operations_queued")).as_integer() == 0 &&
+               metrics.at(U("operations_running")).as_integer() == 0 &&
+               !fs::exists(output_ / "yt-dlp.count");
+    }
+
+    int port_ = 0;
+};
+
+TEST_F(GateTest, ExactLimitBodyIsAcceptedAndOneMoreByteIsRejected) {
+    const std::string exact = jsonOfSize(8192);
+    ASSERT_EQ(exact.size(), 8192u);
+    const auto accepted = exchange(postHead("Content-Length: 8192\r\n") + exact);
+    EXPECT_EQ(statusOf(accepted), 202) << accepted;
+
+    const std::string over = jsonOfSize(8193);
+    const auto rejected = exchange(postHead("Content-Length: 8193\r\n") + over);
+    EXPECT_EQ(statusOf(rejected), 400) << rejected;
+    EXPECT_NE(rejected.find("Request body exceeds 8 KB"), std::string::npos);
+}
+
+TEST_F(GateTest, OversizedKnownLengthIsRejectedBeforeTheBodyArrives) {
+    RawClient client(port_);
+    const auto started = std::chrono::steady_clock::now();
+    client.send(postHead("Content-Length: 10000000000\r\n")); // no body bytes at all
+    bool closed = false;
+    const auto response = client.readAll(std::chrono::seconds(3), &closed);
+    EXPECT_EQ(statusOf(response), 400) << response;
+    EXPECT_TRUE(closed);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(1));
+    EXPECT_LT(server_->requestStats().peak_request_bytes, 16384u + 4096u);
+    EXPECT_TRUE(nothingEnqueued());
+}
+
+TEST_F(GateTest, ChunkedBodiesAreDecodedWithABoundedBuffer) {
+    const std::string json = jsonOfSize(100);
+    std::ostringstream chunked;
+    chunked << std::hex << 0x40 << "\r\n" << json.substr(0, 0x40) << "\r\n";
+    chunked << std::hex << (json.size() - 0x40) << ";ext=1\r\n" << json.substr(0x40) << "\r\n";
+    chunked << "0\r\nX-Trailer: ok\r\n\r\n";
+    const auto accepted = exchange(postHead("Transfer-Encoding: chunked\r\n") + chunked.str());
+    EXPECT_EQ(statusOf(accepted), 202) << accepted;
+
+    // Keep streaming 1 KiB chunks; the gate must answer 400 once 8 KiB is exceeded, without
+    // buffering the rest.
+    RawClient client(port_);
+    client.send(postHead("Transfer-Encoding: chunked\r\n"));
+    const std::string piece = "400\r\n" + std::string(1024, 'x') + "\r\n";
+    for (int i = 0; i < 1024; ++i) {
+        if (!client.send(piece)) {
+            break; // the gate closed the connection
+        }
+    }
+    const auto response = client.readAll(std::chrono::seconds(3));
+    EXPECT_EQ(statusOf(response), 400) << response;
+    EXPECT_LE(server_->requestStats().peak_request_bytes, 8192u + 4096u + 1024u);
+
+    // A single huge declared chunk is rejected from its size line.
+    const auto huge = exchange(postHead("Transfer-Encoding: chunked\r\n") + "FFFFFFFFFF\r\n");
+    EXPECT_EQ(statusOf(huge), 400) << huge;
+}
+
+TEST_F(GateTest, SlowAndIncompleteBodiesTimeOutWhileHealthStaysResponsive) {
+    RawClient slow(port_);
+    slow.send(postHead("Content-Length: 100\r\n") + "{\"url\":");
+    const auto started = std::chrono::steady_clock::now();
+    EXPECT_EQ(request(methods::GET, "/v1/healthz").status_code(), status_codes::OK);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::milliseconds(500));
+    bool closed = false;
+    const auto response = slow.readAll(std::chrono::seconds(5), &closed);
+    EXPECT_EQ(statusOf(response), 408) << response;
+    EXPECT_TRUE(closed);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(3));
+    EXPECT_TRUE(nothingEnqueued());
+}
+
+TEST_F(GateTest, MalformedFramingIsRejected) {
+    const std::vector<std::string> heads = {
+        "Content-Length: abc\r\n",
+        "Content-Length: -1\r\n",
+        "Content-Length: 1, 2\r\n",
+        "Content-Length: 10\r\nContent-Length: 10\r\n",
+        "Content-Length: 10\r\nTransfer-Encoding: chunked\r\n",
+        "Transfer-Encoding: gzip\r\n",
+        " folded: header\r\n",
+    };
+    for (const auto& head : heads) {
+        const auto response = exchange(postHead(head) + "0123456789");
+        EXPECT_EQ(statusOf(response), 400) << head << response;
+    }
+    const auto badChunk = exchange(postHead("Transfer-Encoding: chunked\r\n") + "zz\r\n");
+    EXPECT_EQ(statusOf(badChunk), 400) << badChunk;
+    const auto badLine = exchange("NOT-HTTP\r\n\r\n");
+    EXPECT_EQ(statusOf(badLine), 400) << badLine;
+    const auto bigHead =
+        exchange("GET /v1/healthz HTTP/1.1\r\nX-Big: " + std::string(20000, 'a') + "\r\n\r\n");
+    EXPECT_EQ(statusOf(bigHead), 431) << bigHead.substr(0, 100);
+    EXPECT_TRUE(nothingEnqueued());
+}
+
+TEST_F(GateTest, DisconnectMidBodyEnqueuesNothing) {
+    const auto before = server_->requestStats().client_disconnects;
+    {
+        RawClient client(port_);
+        client.send(postHead("Content-Length: 100\r\n") + std::string(50, ' '));
+    }
+    ASSERT_TRUE(waitUntil([&] { return server_->requestStats().client_disconnects > before; }));
+    EXPECT_TRUE(nothingEnqueued());
+}
+
+TEST_F(GateTest, PendingReadsAreBoundedAndReleasedByTimeout) {
+    std::vector<std::unique_ptr<RawClient>> slow;
+    for (int i = 0; i < 4; ++i) {
+        slow.push_back(std::make_unique<RawClient>(port_));
+        slow.back()->send(postHead("Content-Length: 100\r\n"));
+    }
+    ASSERT_TRUE(waitUntil([&] { return server_->requestStats().pending_reads == 4; }));
+    const auto rejected = exchange("GET /v1/healthz HTTP/1.1\r\n\r\n");
+    EXPECT_EQ(statusOf(rejected), 503) << rejected;
+    // The read timeout frees the slots; health works again.
+    ASSERT_TRUE(waitUntil([&] { return server_->requestStats().pending_reads == 0; },
+                          std::chrono::seconds(5)));
+    EXPECT_EQ(request(methods::GET, "/v1/healthz").status_code(), status_codes::OK);
+}
+
+TEST_F(GateTest, ShutdownClosesHalfReadRequests) {
+    RawClient slow(port_);
+    slow.send(postHead("Content-Length: 100\r\n") + "{");
+    ASSERT_TRUE(waitUntil([&] { return server_->requestStats().pending_reads == 1; }));
+    const auto started = std::chrono::steady_clock::now();
+    server_->stop();
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(5));
+    bool closed = false;
+    slow.readAll(std::chrono::seconds(2), &closed);
+    EXPECT_TRUE(closed);
+    server_.reset();
+}
+
+TEST_F(GateTest, InternalListenerRejectsRequestsThatBypassTheGate) {
+    http_client direct(utility::conversions::to_string_t(
+        "http://127.0.0.1:" + std::to_string(server_->internalPortForTests())));
+    http_request req(methods::GET);
+    req.set_request_uri(U("/v1/healthz"));
+    EXPECT_EQ(direct.request(req).get().status_code(), status_codes::Forbidden);
+}
+#endif

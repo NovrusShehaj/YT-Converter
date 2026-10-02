@@ -6,8 +6,10 @@
 #include "logger.h"
 #include "metrics.h"
 #include "process.h"
+#include "request_gate.h"
 #include "validation.h"
 
+#include <cpprest/streams.h>
 #include <cpprest/http_listener.h>
 #include <cpprest/json.h>
 
@@ -15,6 +17,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <csignal>
 #include <filesystem>
 #include <fstream>
@@ -25,6 +28,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 using namespace web;
 using namespace web::http;
@@ -94,10 +98,92 @@ bool isSafeRequestId(const std::string& id) {
                        [](unsigned char c) { return std::isalnum(c) || c == '_' || c == '-'; });
 }
 
-bool isLoopbackRemote(const std::string& remote) {
-    return remote.find("127.0.0.1") != std::string::npos ||
-           remote.find("::1") != std::string::npos || remote == "localhost";
+bool isLoopbackPeer(const std::string& peer) {
+    return peer == "127.0.0.1" || peer == "::1" || peer == "::ffff:127.0.0.1";
 }
+
+std::string headerValue(const http_request& request, const char* name) {
+    const auto& headers = request.headers();
+    const auto key = toT(name);
+    if (!headers.has(key)) {
+        return {};
+    }
+    return toUtf8(headers.find(key)->second);
+}
+
+std::string randomSecret() {
+    std::random_device device;
+    std::ostringstream ss;
+    for (int i = 0; i < 4; ++i) {
+        ss << std::hex << std::setw(8) << std::setfill('0') << device();
+    }
+    return ss.str();
+}
+
+// Reads at most `limit` body bytes with asynchronous stream reads; never blocks a listener
+// thread. The gate already guarantees a complete body of at most 8 KiB, so this is a second,
+// independent bound rather than the only one.
+class BodyReader : public std::enable_shared_from_this<BodyReader> {
+  public:
+    BodyReader(const concurrency::streams::istream& stream, std::size_t limit)
+        : source_(stream.streambuf()), buffer_(limit), limit_(limit) {}
+
+    pplx::task<std::string> read() {
+        auto self = shared_from_this();
+        if (used_ >= limit_) {
+            return pplx::task_from_result(text());
+        }
+        return source_.getn(buffer_.data() + used_, limit_ - used_).then([self](std::size_t count) {
+            if (count == 0) {
+                return pplx::task_from_result(self->text());
+            }
+            self->used_ += count;
+            return self->read();
+        });
+    }
+
+  private:
+    std::string text() const {
+        return std::string(reinterpret_cast<const char*>(buffer_.data()), used_);
+    }
+
+    concurrency::streams::streambuf<std::uint8_t> source_;
+    std::vector<std::uint8_t> buffer_; // fixed capacity: never grows past the limit
+    std::size_t used_ = 0;
+    std::size_t limit_;
+};
+
+// Counts request continuations still running so shutdown can wait for them before the server
+// state they use is destroyed.
+struct Continuations {
+    std::mutex mutex;
+    std::condition_variable cv;
+    int active = 0;
+
+    struct Token {
+        explicit Token(std::shared_ptr<Continuations> owner) : owner_(std::move(owner)) {
+            std::lock_guard<std::mutex> lock(owner_->mutex);
+            ++owner_->active;
+        }
+        ~Token() {
+            {
+                std::lock_guard<std::mutex> lock(owner_->mutex);
+                --owner_->active;
+            }
+            owner_->cv.notify_all();
+        }
+        Token(const Token&) = delete;
+        Token& operator=(const Token&) = delete;
+
+      private:
+        std::shared_ptr<Continuations> owner_;
+    };
+
+    bool waitIdle(std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(mutex);
+        return cv.wait_for(lock, timeout, [this] { return active == 0; });
+    }
+};
 
 json::value errorBody(const yt::Error& error) {
     json::value body;
@@ -189,7 +275,32 @@ class ApiServer::Impl {
     std::shared_ptr<std::atomic<bool>> stopping_ = std::make_shared<std::atomic<bool>>(false);
     jobs::Queue jobQueue;
     std::unique_ptr<http_listener> listener;
+    std::unique_ptr<RequestGate> gate;
+    std::shared_ptr<Continuations> continuations = std::make_shared<Continuations>();
+    std::string gateSecret = randomSecret();
+    int internalPort = 0;
     std::atomic<bool> running{false};
+
+    std::string internalUrl() const { return "http://127.0.0.1:" + std::to_string(internalPort); }
+
+    // Only requests relayed by the gate reach the handlers. The internal listener is bound to
+    // loopback, and the per-process secret stops other local processes from bypassing the gate.
+    bool fromGate(const http_request& request) const {
+#ifdef _WIN32
+        (void)request;
+        return true;
+#else
+        return constantTimeEquals(headerValue(request, kGateSecretHeader), gateSecret);
+#endif
+    }
+
+    std::string peerOf(const http_request& request) const {
+#ifdef _WIN32
+        return toUtf8(request.remote_address());
+#else
+        return headerValue(request, kGatePeerHeader);
+#endif
+    }
 
     std::string url() const {
         if (config.bind.find(':') != std::string::npos && config.bind != "localhost") {
@@ -253,6 +364,11 @@ class ApiServer::Impl {
         }
         logger.setContext({requestId, {}});
 
+        if (!fromGate(request)) {
+            replyJson(request, 403, errorBody(ErrorCode::Unauthorized, "Forbidden"));
+            logger.clearContext();
+            return;
+        }
         if (g_shutdown.load()) {
             replyJson(request, 503, errorBody(ErrorCode::Busy, "Server is shutting down"));
             logger.clearContext();
@@ -296,7 +412,7 @@ class ApiServer::Impl {
                 return;
             }
             if (path == "/v1/metrics" && method == methods::GET) {
-                if (!isLoopbackRemote(toUtf8(request.remote_address()))) {
+                if (!isLoopbackPeer(peerOf(request))) {
                     replyJson(request, 404, errorBody(ErrorCode::InvalidInput, "Not found"));
                     logger.clearContext();
                     return;
@@ -371,19 +487,20 @@ class ApiServer::Impl {
     }
 
     void handleConvert(http_request& request, const std::string& requestId) {
-        auto& logger = yt::logger::Logger::getInstance();
+        // Strict Content-Length validation; a valid oversized length is rejected before reading.
         if (request.headers().has(U("Content-Length"))) {
-            try {
-                const auto length =
-                    std::stoll(toUtf8(request.headers().find(U("Content-Length"))->second));
-                if (length > static_cast<long long>(kMaxBodyBytes)) {
-                    replyJson(request, 400,
-                              errorBody(ErrorCode::InvalidInput, "Request body exceeds 8 KB"));
-                    return;
-                }
-            } catch (const std::exception&) {
+            const std::string length = headerValue(request, "Content-Length");
+            const bool digits = !length.empty() && length.size() <= 19 &&
+                                std::all_of(length.begin(), length.end(),
+                                            [](unsigned char c) { return std::isdigit(c) != 0; });
+            if (!digits) {
                 replyJson(request, 400,
                           errorBody(ErrorCode::InvalidInput, "Invalid Content-Length"));
+                return;
+            }
+            if (std::stoull(length) > kMaxBodyBytes) {
+                replyJson(request, 400,
+                          errorBody(ErrorCode::InvalidInput, "Request body exceeds 8 KB"));
                 return;
             }
         }
@@ -397,20 +514,40 @@ class ApiServer::Impl {
             return;
         }
 
-        std::string raw;
-        try {
-            raw = toUtf8(request.extract_string().get());
-        } catch (...) {
-            replyJson(request, 400,
-                      errorBody(ErrorCode::InvalidInput, "Request body must be JSON"));
-            return;
-        }
-        if (raw.size() > kMaxBodyBytes) {
-            replyJson(request, 400,
-                      errorBody(ErrorCode::InvalidInput, "Request body exceeds 8 KB"));
-            return;
-        }
+        // Read at most 8,193 bytes asynchronously; the extra byte detects overflow. JSON is only
+        // parsed once a complete body of at most 8,192 bytes is available.
+        auto token = std::make_shared<Continuations::Token>(continuations);
+        auto reader = std::make_shared<BodyReader>(request.body(), kMaxBodyBytes + 1);
+        reader->read().then([this, request, requestId, token](const pplx::task<std::string>& task) {
+            auto& logger = yt::logger::Logger::getInstance();
+            logger.setContext({requestId, {}});
+            try {
+                std::string raw;
+                try {
+                    raw = task.get();
+                } catch (...) {
+                    replyJson(request, 400,
+                              errorBody(ErrorCode::InvalidInput, "Request body must be JSON"));
+                    logger.clearContext();
+                    return;
+                }
+                if (raw.size() > kMaxBodyBytes) {
+                    replyJson(request, 400,
+                              errorBody(ErrorCode::InvalidInput, "Request body exceeds 8 KB"));
+                } else {
+                    convertBody(request, requestId, raw);
+                }
+            } catch (const std::exception& error) {
+                logger.critical(std::string("Unhandled API error: ") + error.what());
+                replyJson(request, 500, errorBody(ErrorCode::Internal, "Internal server error"));
+            }
+            logger.clearContext();
+        });
+    }
 
+    void convertBody(const http_request& request, const std::string& requestId,
+                     const std::string& raw) {
+        auto& logger = yt::logger::Logger::getInstance();
         json::value body;
         try {
             body = json::value::parse(toT(raw));
@@ -537,22 +674,59 @@ void ApiServer::start() {
         return;
     }
     impl_->stopping_->store(false);
-    jobs::Limits limits;
-    limits.workers = impl_->config.max_concurrent;
-    limits.max_operations = impl_->config.queue_depth;
-    limits.max_active_jobs = impl_->config.max_active_jobs;
-    limits.history_max = impl_->config.job_history_max;
-    limits.history_ttl_sec = impl_->config.job_history_ttl_sec;
-    impl_->jobQueue.start(limits);
-    impl_->listener = std::make_unique<http_listener>(toT(impl_->url()));
-    auto* impl = impl_.get();
-    impl_->listener->support(methods::GET,
-                             [impl](const http_request& request) { impl->handle(request); });
-    impl_->listener->support(methods::POST,
-                             [impl](const http_request& request) { impl->handle(request); });
-    impl_->listener->support(methods::DEL,
-                             [impl](const http_request& request) { impl->handle(request); });
-    impl_->listener->open().wait();
+    const Config& config = impl_->config;
+#ifndef _WIN32
+    // The gate owns the public socket; binding first surfaces port conflicts before anything
+    // else starts.
+    GateLimits gateLimits;
+    gateLimits.max_body_bytes = kMaxBodyBytes;
+    gateLimits.read_timeout_ms = config.request_read_timeout_sec * 1000;
+    gateLimits.max_pending_reads = config.max_pending_reads;
+    gateLimits.max_connections = config.max_connections;
+    impl_->gate = std::make_unique<RequestGate>(gateLimits, impl_->gateSecret);
+    impl_->gate->bind(config.bind, config.port);
+#endif
+    try {
+        jobs::Limits limits;
+        limits.workers = config.max_concurrent;
+        limits.max_operations = config.queue_depth;
+        limits.max_active_jobs = config.max_active_jobs;
+        limits.history_max = config.job_history_max;
+        limits.history_ttl_sec = config.job_history_ttl_sec;
+        impl_->jobQueue.start(limits);
+
+        auto* impl = impl_.get();
+        for (int attempt = 0;; ++attempt) {
+#ifndef _WIN32
+            impl_->internalPort = findFreeLoopbackPort();
+            const std::string url = impl_->internalUrl();
+#else
+            const std::string url = impl_->url();
+#endif
+            impl_->listener = std::make_unique<http_listener>(toT(url));
+            impl_->listener->support(
+                methods::GET, [impl](const http_request& request) { impl->handle(request); });
+            impl_->listener->support(
+                methods::POST, [impl](const http_request& request) { impl->handle(request); });
+            impl_->listener->support(
+                methods::DEL, [impl](const http_request& request) { impl->handle(request); });
+            try {
+                impl_->listener->open().wait();
+                break;
+            } catch (...) {
+                impl_->listener.reset();
+                if (attempt >= 4) {
+                    throw;
+                }
+            }
+        }
+#ifndef _WIN32
+        impl_->gate->start(impl_->internalPort);
+#endif
+    } catch (...) {
+        stop();
+        throw;
+    }
     impl_->running.store(true);
     yt::logger::Logger::getInstance().info("HTTP listener opened on " + impl_->url());
 }
@@ -563,10 +737,29 @@ void ApiServer::stop() {
     // Resolves outstanding synchronous responses (503) and joins workers before the listener
     // and the rest of the server state go away.
     impl_->jobQueue.stop();
+    // Closing the internal listener completes in-flight exchanges; the gate is still running, so
+    // their responses reach clients.
     if (impl_->listener) {
         impl_->listener->close().wait();
         impl_->listener.reset();
     }
+    // Body-read continuations use server state; none may outlive it.
+    if (!impl_->continuations->waitIdle(std::chrono::seconds(10))) {
+        yt::logger::Logger::getInstance().critical("Request continuations did not finish");
+    }
+    // Closes remaining client connections, including half-read requests.
+    if (impl_->gate) {
+        impl_->gate->stop();
+        impl_->gate.reset();
+    }
+}
+
+int ApiServer::internalPortForTests() const {
+    return impl_->internalPort;
+}
+
+GateStats ApiServer::requestStats() const {
+    return impl_->gate ? impl_->gate->stats() : GateStats{};
 }
 
 void ApiServer::runUntilSignal() {
